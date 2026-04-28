@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  publish-tauri:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS Apple Silicon
+          - platform: macos-latest
+            rust_target: aarch64-apple-darwin
+            args: "--target aarch64-apple-darwin"
+          # macOS Intel
+          - platform: macos-13
+            rust_target: x86_64-apple-darwin
+            args: "--target x86_64-apple-darwin"
+          # Linux x64 (deb + AppImage + rpm)
+          - platform: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            args: ""
+          # Windows x64 (nsis + msi)
+          - platform: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: Build & publish with tauri-action
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          tauriScript: pnpm tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: "frpDesktop ${{ github.ref_name }}"
+          releaseBody: |
+            frpDesktop ${{ github.ref_name }} — 跨平台 frpc 管家
+
+            ### 下载
+            - **macOS Apple Silicon (M1/M2/M3)**：`*_aarch64.dmg`
+            - **macOS Intel**：`*_x64.dmg`
+            - **Windows x64**：`*_x64-setup.exe` 或 `*_x64_en-US.msi`
+            - **Linux x64**：`*.AppImage` / `*_amd64.deb`
+
+            请查看下方 Assets 下载对应系统的安装包。
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
