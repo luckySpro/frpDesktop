@@ -1,0 +1,33 @@
+# 私钥与证书（敏感，不上传）
+ueware.crt
+ueware.key
+*.key
+*.pem
+*.p12
+
+# macOS 系统文件
+.DS_Store
+
+# 编辑器/IDE
+.idea/
+.vscode/
+*.swp
+
+# Node / 前端构建产物
+node_modules/
+dist/
+.cache/
+.parcel-cache/
+*.log
+
+# TypeScript 增量构建缓存
+*.tsbuildinfo
+
+# Rust / Tauri 构建产物
+target/
+src-tauri/target/
+
+# 环境变量
+.env
+.env.local
+.env.*.local

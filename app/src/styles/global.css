@@ -1,0 +1,207 @@
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: #fff8f1;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(249, 115, 22, 0.28);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(249, 115, 22, 0.55);
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-panel {
+  background: linear-gradient(180deg,#1c1108 0%,#2a1810 100%);
+  color: #fde4c7;
+  border-radius: 0 0 14px 14px;
+  padding: 14px 16px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  height: 380px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border-top: 1px solid rgba(251, 191, 36, 0.1);
+}
+.log-panel .line { padding: 1px 0; }
+.log-panel .line-stdout { color: #fde4c7; }
+.log-panel .line-stderr { color: #fca5a5; }
+.log-panel .line-system { color: #fbbf24; font-weight: 500; }
+
+/* Sidebar dark menu: orange-accented selection */
+.ant-layout-sider .ant-menu-dark {
+  background: transparent !important;
+}
+.ant-layout-sider .ant-menu-dark .ant-menu-item {
+  margin: 6px 10px;
+  border-radius: 10px;
+  width: calc(100% - 20px);
+  transition: all 0.2s ease;
+}
+.ant-layout-sider .ant-menu-dark .ant-menu-item:hover {
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+.ant-layout-sider .ant-menu-dark .ant-menu-item-selected {
+  background: linear-gradient(135deg,#f97316 0%,#fb923c 50%,#fbbf24 100%) !important;
+  box-shadow: 0 6px 16px rgba(249, 115, 22, 0.35);
+}
+.ant-layout-sider .ant-menu-dark .ant-menu-item-selected .ant-menu-item-icon,
+.ant-layout-sider .ant-menu-dark .ant-menu-item-selected .ant-menu-title-content {
+  color: #fff !important;
+}
+
+.section-title {
+  font-size: 13px;
+  color: #7c2d12;
+  margin: 4px 0 8px;
+  font-weight: 600;
+}
+
+/* Input / Select / InputNumber refinements */
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-input-number,
+.ant-input-password,
+.ant-select .ant-select-selector,
+.ant-picker {
+  border-radius: 10px !important;
+}
+.ant-input:hover,
+.ant-input-affix-wrapper:hover,
+.ant-input-number:hover,
+.ant-input-password:hover,
+.ant-select:hover .ant-select-selector,
+.ant-picker:hover {
+  border-color: #fb923c !important;
+}
+.ant-input:focus,
+.ant-input-affix-wrapper-focused,
+.ant-input-number-focused,
+.ant-input-password-focused,
+.ant-select-focused .ant-select-selector,
+.ant-picker-focused {
+  border-color: #f97316 !important;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.12) !important;
+}
+.ant-input-number {
+  width: 100%;
+}
+.ant-btn {
+  border-radius: 10px;
+  font-weight: 500;
+}
+.ant-btn-primary {
+  background: linear-gradient(135deg,#f97316 0%,#fb923c 100%) !important;
+  border: none !important;
+  box-shadow: 0 4px 10px rgba(249, 115, 22, 0.3) !important;
+}
+.ant-btn-primary:hover {
+  background: linear-gradient(135deg,#ea580c 0%,#f97316 100%) !important;
+  box-shadow: 0 6px 14px rgba(249, 115, 22, 0.4) !important;
+}
+.ant-btn-primary:disabled,
+.ant-btn-primary.ant-btn-disabled {
+  background: #fed7aa !important;
+  color: #fff !important;
+  box-shadow: none !important;
+}
+.ant-btn-dangerous.ant-btn-variant-solid,
+.ant-btn-dangerous.ant-btn-primary {
+  background: linear-gradient(135deg,#ef4444 0%,#f87171 100%) !important;
+  border: none !important;
+  box-shadow: 0 4px 10px rgba(239, 68, 68, 0.3) !important;
+}
+
+.ant-form-item-label > label {
+  font-size: 12px !important;
+  color: #7c2d12 !important;
+  font-weight: 500;
+}
+.ant-form-vertical .ant-form-item-label {
+  padding-bottom: 4px !important;
+}
+.ant-form-item {
+  margin-bottom: 14px;
+}
+
+/* Compact groups flush corners */
+.ant-space-compact .ant-input {
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+}
+.ant-space-compact .ant-btn:last-child {
+  border-top-left-radius: 0 !important;
+  border-bottom-left-radius: 0 !important;
+}
+
+/* Tabs */
+.ant-tabs-tab {
+  padding: 8px 14px !important;
+  color: #92754d !important;
+}
+.ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  font-weight: 600;
+  color: #ea580c !important;
+}
+.ant-tabs-ink-bar {
+  background: linear-gradient(90deg,#f97316,#fbbf24) !important;
+  height: 3px !important;
+  border-radius: 3px !important;
+}
+
+/* List hover warm highlight */
+.ant-list .ant-list-item {
+  transition: background 0.15s ease;
+  border-bottom-color: #fff1e0 !important;
+}
+.ant-list .ant-list-item:hover {
+  background: #fff7ed;
+}
+
+/* Card titles lighter */
+.ant-card-head-title {
+  font-size: 14px !important;
+}
+
+/* Progress bar uses warm palette */
+.ant-progress-bg {
+  background: linear-gradient(90deg,#f97316,#fbbf24) !important;
+}
+
+/* Badge processing dot color override for warm running state */
+.ant-badge-status-processing {
+  background: #f97316 !important;
+}
+.ant-badge-status-processing::after {
+  border-color: #f97316 !important;
+}
+
+/* Tooltip & Popconfirm tint */
+.ant-tooltip-inner {
+  background: #1c1917 !important;
+  border-radius: 8px !important;
+}
+.ant-tooltip-arrow::before {
+  background: #1c1917 !important;
+}
+
+/* Selection */
+::selection {
+  background: rgba(251, 191, 36, 0.35);
+  color: #7c2d12;
+}

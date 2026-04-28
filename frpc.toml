@@ -1,0 +1,30 @@
+serverAddr = "f.ueware.com"
+serverPort = 9780
+auth.token = "luckyAa!1"
+
+
+# 客户端管理面板
+
+[[proxies]]
+name = "funasr.ueware.com"                  # 名称,随意填,与后面的name不可重复
+type = "https"
+customDomains = ["funasr.ueware.com"] # 需要指向的域名,后面运行后使用这个域名访问
+[proxies.plugin]
+type = "https2http"
+localAddr = "127.0.0.1:5273"                                         # 需要穿透的本地web服务
+crtPath = "./ueware.crt" # 对应域名的 crt 证书
+keyPath = "./ueware.key"        # 对应域名的 key 证书
+hostHeaderRewrite = "127.0.0.1"                                      # 与 localAddr 的 ip 对应即可
+requestHeaders.set.x-from-where = "frp"
+
+[[proxies]]
+name = "cake.ueware.com"                  # 名称,随意填,与后面的name不可重复
+type = "https"
+customDomains = ["cake.ueware.com"] # 需要指向的域名,后面运行后使用这个域名访问
+[proxies.plugin]
+type = "https2http"
+localAddr = "127.0.0.1:8080"                                         # 需要穿透的本地web服务
+crtPath = "./ueware.crt" # 对应域名的 crt 证书
+keyPath = "./ueware.key"        # 对应域名的 key 证书
+hostHeaderRewrite = "127.0.0.1"                                      # 与 localAddr 的 ip 对应即可
+requestHeaders.set.x-from-where = "frp"
