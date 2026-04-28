@@ -140,33 +140,28 @@ export default function Settings() {
         style={cardStyle}
         styles={cardStyles}
       >
-        <Row gutter={12} align="bottom">
-          <Col flex="auto">
-            <Form.Item
-              label="GitHub 镜像前缀（可选）"
-              style={{ marginBottom: 10 }}
-              help="国内网络可填入加速镜像，如 https://ghproxy.com/"
+        <Form.Item
+          label="GitHub 镜像前缀（可选）"
+          style={{ marginBottom: 12 }}
+          help="国内网络可填入加速镜像，如 https://ghproxy.com/"
+        >
+          <Space.Compact style={{ width: "100%" }}>
+            <Input
+              placeholder="https://ghproxy.com/"
+              prefix={<GlobalOutlined style={{ color: "#94a3b8" }} />}
+              value={mirror}
+              onChange={(e) => setMirror(e.target.value)}
+            />
+            <Button
+              icon={<ReloadOutlined />}
+              loading={loadingList}
+              onClick={refreshVersions}
+              style={{ flex: "0 0 auto" }}
             >
-              <Input
-                placeholder="https://ghproxy.com/"
-                prefix={<GlobalOutlined style={{ color: "#94a3b8" }} />}
-                value={mirror}
-                onChange={(e) => setMirror(e.target.value)}
-              />
-            </Form.Item>
-          </Col>
-          <Col flex="none">
-            <Form.Item style={{ marginBottom: 10 }}>
-              <Button
-                icon={<ReloadOutlined />}
-                loading={loadingList}
-                onClick={refreshVersions}
-              >
-                刷新版本列表
-              </Button>
-            </Form.Item>
-          </Col>
-        </Row>
+              刷新版本列表
+            </Button>
+          </Space.Compact>
+        </Form.Item>
 
         {installing && (
           <Alert

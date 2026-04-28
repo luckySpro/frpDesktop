@@ -159,7 +159,7 @@ export default function App() {
           }}
         >
           <ThunderboltOutlined style={{ color: "#fbbf24" }} />
-          Tauri 2 · React
+          Lucky's Tool
         </div>
       </Sider>
       <Layout

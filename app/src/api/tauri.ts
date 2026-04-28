@@ -30,23 +30,56 @@ export interface VersionEntry {
 }
 
 export interface PluginForm {
+  /** none | https2http | https2https | http2https | static_file | http_proxy | socks5 | unix_domain_socket */
   type: string;
+  // 通用 / 反向代理类
   localAddr?: string | null;
+  hostHeaderRewrite?: string | null;
   crtPath?: string | null;
   keyPath?: string | null;
-  hostHeaderRewrite?: string | null;
   requestHeadersSet?: Record<string, string>;
+  // unix_domain_socket
+  unixPath?: string | null;
+  // static_file
+  localPath?: string | null;
+  stripPrefix?: string | null;
+  // http_proxy / socks5 / static_file 鉴权
+  httpUser?: string | null;
+  httpPassword?: string | null;
+  username?: string | null;
+  password?: string | null;
+  /** 未知字段透传 */
   extra?: Record<string, string>;
 }
 
 export interface ProxyForm {
   name: string;
+  /** tcp | udp | http | https | tcpmux | stcp | sudp | xtcp */
   type: string;
-  customDomains?: string[];
+  // 通用
   localIp?: string | null;
   localPort?: number | null;
   remotePort?: number | null;
+  // http / https / tcpmux
+  customDomains?: string[];
   subdomain?: string | null;
+  // http
+  locations?: string[];
+  httpUser?: string | null;
+  httpPassword?: string | null;
+  hostHeaderRewrite?: string | null;
+  // tcpmux
+  multiplexer?: string | null;
+  routeByHttpUser?: string | null;
+  // stcp / sudp / xtcp
+  secretKey?: string | null;
+  allowUsers?: string[];
+  // transport
+  useEncryption?: boolean | null;
+  useCompression?: boolean | null;
+  bandwidthLimit?: string | null;
+  bandwidthLimitMode?: string | null;
+  // 插件
   plugin?: PluginForm | null;
 }
 

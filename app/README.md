@@ -1,6 +1,6 @@
 # frpDesktop
 
-macOS 上的 frpc 管理工具（Tauri 2 + React）。
+macOS 上的 frpc 管理工具（Lucky'Tool）。
 
 ## 特性
 - 表单 / TOML 源码双视图编辑 frpc.toml（完整支持 `https2http` 插件、`crtPath/keyPath`、`requestHeaders.set`）
