@@ -157,8 +157,22 @@ pub fn run() {
             crate::commands::launchd_enable,
             crate::commands::launchd_disable,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running frpDesktop");
+        .build(tauri::generate_context!())
+        .expect("error while running frpDesktop")
+        .run(|app_handle, event| {
+            // macOS: 主窗口被关闭到 Dock 后，点击 Dock 图标恢复窗口。
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
+                if !has_visible_windows {
+                    show_main_window(app_handle);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = app_handle;
+                let _ = event;
+            }
+        });
 }
 
 async fn run_frpc_start(app: &tauri::AppHandle) -> anyhow::Result<()> {

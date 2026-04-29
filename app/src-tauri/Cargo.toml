@@ -1,6 +1,6 @@
 [package]
 name = "frp-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "frpc macOS desktop manager"
 authors = ["ueware"]
 edition = "2021"
