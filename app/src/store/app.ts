@@ -1,108 +1,111 @@
 import { create } from "zustand";
-import { api, onLog, onStatus, RunnerStatus, LogLine, PathsInfo, LaunchdStatus } from "../api/tauri";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { api, events } from "../api/tauri";
+import type { AppInfo, CertFile, DaemonStatus, LogLine, RunnerStatus, Settings } from "../api/types";
+import { parsePersistedLine } from "../lib/logs";
 
 interface AppStore {
   booted: boolean;
-  paths: PathsInfo | null;
+  info: AppInfo | null;
+  settings: Settings | null;
   status: RunnerStatus;
   logs: LogLine[];
-  version: string | null;
-  launchd: LaunchdStatus | null;
+  daemon: DaemonStatus | null;
+  certs: CertFile[];
 
   boot: () => Promise<void>;
-  refreshStatus: () => Promise<void>;
-  refreshPaths: () => Promise<void>;
-  refreshVersion: () => Promise<void>;
-  refreshLaunchd: () => Promise<void>;
-  clearLogs: () => void;
+  refreshInfo: () => Promise<void>;
+  refreshSettings: () => Promise<void>;
+  saveSettings: (patch: Partial<Settings>) => Promise<void>;
+  refreshDaemon: () => Promise<void>;
+  refreshCerts: () => Promise<void>;
+  clearLogs: () => Promise<void>;
 }
 
-const MAX_LOGS = 2000;
-let logUnlisten: UnlistenFn | null = null;
-let statusUnlisten: UnlistenFn | null = null;
+const MAX_LOGS = 3000;
+let unlisten: UnlistenFn[] = [];
 
-export const useAppStore = create<AppStore>((set, get) => ({
+export const useApp = create<AppStore>((set, get) => ({
   booted: false,
-  paths: null,
+  info: null,
+  settings: null,
   status: { status: "stopped" },
   logs: [],
-  version: null,
-  launchd: null,
+  daemon: null,
+  certs: [],
 
   async boot() {
     if (get().booted) return;
     set({ booted: true });
-
-    if (!logUnlisten) {
-      logUnlisten = await onLog((line) => {
-        const next = [...get().logs, line];
-        if (next.length > MAX_LOGS) next.splice(0, next.length - MAX_LOGS);
-        set({ logs: next });
-      });
-    }
-    if (!statusUnlisten) {
-      statusUnlisten = await onStatus((s) => set({ status: s }));
-    }
-
-    // Hydrate from persisted log file.
+    unlisten.forEach((u) => u());
+    unlisten = await Promise.all([
+      events.onLog((line) => {
+        const logs = get().logs.concat(line);
+        if (logs.length > MAX_LOGS) logs.splice(0, logs.length - MAX_LOGS);
+        set({ logs });
+      }),
+      events.onStatus((status) => set({ status })),
+    ]);
     try {
-      const tail = await api.runnerTailLog(300);
-      const parsed: LogLine[] = tail.map((line) => {
-        if (line.startsWith("[stderr]")) return { stream: "stderr", line: line.slice(9) };
-        if (line.startsWith("[stdout]")) return { stream: "stdout", line: line.slice(9) };
-        return { stream: "system", line };
-      });
-      set({ logs: parsed });
+      const tail = await api.runnerTailLog(500);
+      set({ logs: tail.map(parsePersistedLine) });
     } catch {
-      // ignore
+      /* no log yet */
     }
-
     await Promise.all([
-      get().refreshPaths(),
-      get().refreshStatus(),
-      get().refreshVersion(),
-      get().refreshLaunchd(),
+      get().refreshInfo(),
+      get().refreshSettings(),
+      get().refreshDaemon(),
+      get().refreshCerts(),
+      api.runnerStatus().then((status) => set({ status })).catch(() => {}),
     ]);
   },
 
-  async refreshPaths() {
+  async refreshInfo() {
     try {
-      const paths = await api.pathsInfo();
-      set({ paths });
+      set({ info: await api.appInfo() });
     } catch (e) {
       console.error(e);
     }
   },
 
-  async refreshStatus() {
+  async refreshSettings() {
     try {
-      const status = await api.runnerStatus();
-      set({ status });
+      set({ settings: await api.settingsGet() });
     } catch (e) {
       console.error(e);
     }
   },
 
-  async refreshVersion() {
+  async saveSettings(patch) {
+    const cur = get().settings;
+    if (!cur) return;
+    const settings = await api.settingsSave({ ...cur, ...patch });
+    set({ settings });
+  },
+
+  async refreshDaemon() {
     try {
-      const version = await api.frpcCurrentVersion();
-      set({ version });
+      set({ daemon: await api.daemonStatus() });
     } catch {
-      set({ version: null });
+      set({ daemon: null });
     }
   },
 
-  async refreshLaunchd() {
+  async refreshCerts() {
     try {
-      const launchd = await api.launchdStatus();
-      set({ launchd });
-    } catch {
-      set({ launchd: null });
+      set({ certs: await api.certsList() });
+    } catch (e) {
+      console.error(e);
     }
   },
 
-  clearLogs() {
+  async clearLogs() {
+    await api.runnerClearLog().catch(() => {});
     set({ logs: [] });
   },
 }));
+
+export function isActive(s: RunnerStatus) {
+  return s.status === "running" || s.status === "starting" || s.status === "restarting";
+}

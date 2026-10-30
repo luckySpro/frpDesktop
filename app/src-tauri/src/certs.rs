@@ -508,6 +508,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// RSA keys from openssl (PKCS#8 and traditional) pair with their cert.
+    #[test]
+    fn openssl_rsa_pair_matches() {
+        let dir = tmpdir("rsa");
+        let ok = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-days",
+                "3",
+                "-subj",
+                "/CN=a.test.local",
+            ])
+            .arg("-keyout")
+            .arg(dir.join("certs/a.key"))
+            .arg("-out")
+            .arg(dir.join("certs/a.crt"))
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !ok {
+            eprintln!("openssl not available, skipping");
+            return;
+        }
+        let files = list(&dir.join("certs")).unwrap();
+        let crt = files.iter().find(|f| f.file_name == "a.crt").unwrap();
+        assert_eq!(crt.pair.as_deref(), Some("a.key"), "{files:?}");
+        let info = crt.cert.as_ref().unwrap();
+        assert!(covers(info, "a.test.local"), "CN fallback when no SAN");
+        assert!(info.days_left <= 3);
+        let form = https_form("a.test.local", "./certs/a.crt", "./certs/a.key");
+        let issues = check_form(&form, &dir);
+        assert!(
+            issues.iter().any(|i| i.message.contains("天后过期")),
+            "{issues:?}"
+        );
+        assert!(issues.iter().all(|i| i.level != "error"), "{issues:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn import_rejects_non_pem_and_bad_names() {
         let dir = tmpdir("imp");

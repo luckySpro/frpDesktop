@@ -277,9 +277,11 @@ pub async fn install_version(
     }
     let actual = hex::encode(hasher.finalize());
     match expected {
-        Some(exp) if exp != actual => return Err(AppError::msg(format!(
+        Some(exp) if exp != actual => {
+            return Err(AppError::msg(format!(
             "SHA256 校验失败（期望 {exp}，实际 {actual}）。镜像内容可能被篡改，请换镜像或直连重试"
-        ))),
+        )))
+        }
         Some(_) => {}
         None => tracing::warn!("frp v{version} 没有校验文件，跳过 SHA256 校验"),
     }

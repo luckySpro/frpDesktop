@@ -1,166 +1,120 @@
 # frpDesktop
 
-> 一款跨平台的 **frpc 桌面管家**，专为「HTTPS 单端口承载无数域名」场景而生。
+> 跨平台的 **frpc 桌面管家**，专为「frps 只开一个端口、用自己的 SSL 证书承载任意多个 HTTPS 域名」而做。
 
 ![version](https://img.shields.io/github/v/release/luckySpro/frpDesktop?include_prereleases)
 ![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue)
 ![stack](https://img.shields.io/badge/stack-Tauri%202%20%2B%20React%2018-orange)
 ![license](https://img.shields.io/github/license/luckySpro/frpDesktop)
 
----
+## 截图
 
-## ✨ 这是什么
+| 概览：站点状态、证书剩余天数、实时日志 | 深色模式 |
+| --- | --- |
+| ![概览](docs/screenshots/overview-light.png) | ![概览深色](docs/screenshots/overview-dark.png) |
+| **代理配置**：表单 / 源码双视图，保存前自动检查 | **HTTPS 站点编辑**：从证书库选择证书，私钥自动配对 |
+| ![代理配置](docs/screenshots/proxies-light.png) | ![编辑](docs/screenshots/proxy-editor-light.png) |
+| **证书库**：到期提醒、证书与私钥配对、使用情况 | **设置**：frpc 版本、镜像、自动重启、后台服务 |
+| ![证书库](docs/screenshots/certs-dark.png) | ![设置](docs/screenshots/settings-light.png) |
+| **窄窗口** | |
+| ![窄屏](docs/screenshots/overview-mobile-dark.png) | ![窄屏代理](docs/screenshots/proxies-mobile-light.png) |
 
-很多场景下服务器只放行 **443 端口**（公司/校园网/云服务商限制），而你又想把内网的多个服务通过 HTTPS 对外暴露 —— frp 本身支持 **SNI 多域名复用一个 443 端口**，但手写 TOML、管理 frpc 进程、处理证书路径仍然繁琐。
+> 截图来自演示模式（虚构的 example.com 数据），由 `app/scripts/screenshots.mjs` 生成。
 
-`frpDesktop` 就是为此而来：一个橙金暖色系的原生桌面应用，把 **frpc 的安装、配置、启停、开机自启、证书管理** 全部收拢到可视化界面，让你：
+## 主要功能
 
-- 🔒 在只开放 443 的环境下，通过一个端口承载 **任意多个 HTTPS 域名**
-- 🧩 覆盖 frp 全部 **8 种代理协议** + **9 种插件**，配置无死角
-- 📦 内置 frpc 官方二进制在线下载，支持国内镜像加速
-- 🖥 macOS / Windows / Linux 三端原生安装包，单击即用
+### HTTPS + 自有证书（核心场景）
+- **新建 HTTPS 站点**：填域名和本地地址即可，默认就是 `type = "https"` + `https2http` 插件 + `hostHeaderRewrite` + `requestHeaders.set.x-from-where = "frp"`
+- **证书库**：导入 `.crt/.pem/.key`（PEM，可含证书链），自动识别域名、颁发者、有效期，并校验证书和私钥是否配对
+- 填完域名后自动挑选能覆盖该域名（含通配符 `*.example.com`）的证书
+- 保存前检查：证书文件是否存在、是否过期 / 15 天内过期、是否覆盖域名、证书与私钥是否匹配、localAddr 格式、域名重复等
+- 一键 **frpc verify**：用 frpc 自己的校验命令检查配置
+- 概览页按日志显示每个代理是否启动成功，域名可点击直接在浏览器打开
 
-## 📦 下载
+### 配置不丢失
+- 表单保存时在原 TOML 上就地修改：**注释、键顺序、点号写法以及表单不认识的字段**（`log`、`webServer`、`transport`、`healthCheck`、`metadatas`…）都会原样保留
+- 源码视图（CodeMirror，离线可用）随时切换；保存采用原子写入，并保留 `default.toml.bak`
+- 导入已有 `frpc.toml`：引用的证书会复制进证书库并改写为 `./certs/…`
 
-访问 **[Releases](https://github.com/luckySpro/frpDesktop/releases)** 获取最新版本：
+### frpc 管理
+- 从 GitHub Releases 下载任意版本（macOS / Windows / Linux 各架构），可用国内镜像加速，下载后用官方 `frp_sha256_checksums.txt` 校验
+- 也可指定已有的 frpc 程序
+- 意外退出自动重启（2/4/8/16/32 秒退避，连续失败 5 次后停止）
+- 退出 frpDesktop 时一定会停止它启动的 frpc，不会留下孤儿进程
 
-| 平台 | 安装包 |
-|------|--------|
-| macOS (Apple Silicon & Intel) | `frpDesktop_x.y.z_universal.dmg` |
-| Windows x64 | `frpDesktop_x.y.z_x64-setup.exe` / `.msi` |
-| Linux x64 | `*.AppImage` / `*.deb` / `*.rpm` |
+### 开机运行
+- **登录时启动 frpDesktop**（托盘后台）+ **启动后自动运行 frpc**：所有平台可用
+- **后台服务**：macOS 使用 launchd，Linux 使用 `systemd --user`，不打开应用也会运行；启用后应用内不会再启动第二个 frpc
 
-> 首次打开：macOS 需「右键 → 打开」跳过 Gatekeeper；Windows 点击「仍要运行」跳过 SmartScreen（当前版本未做代码签名）。
+## 快速上手
 
-## 🌟 主要功能
-
-### 界面管理
-- **仪表盘**：实时显示 frpc 运行状态、版本、配置文件路径、PID
-- **配置编辑**：表单视图 + TOML 源码视图双向同步
-  - 代理列表以 **紧凑卡片网格** 展示概要（名称 / 类型 / 域名 / 端口 / 加密压缩状态）
-  - 点击任意卡片弹出 **Drawer 详情编辑面板**，按协议类型智能渲染所需字段
-  - Monaco 编辑器提供 **TOML 语法高亮**（表头、键、字符串、布尔、注释独立着色）
-- **设置面板**：frpc 二进制版本管理、镜像前缀配置、开机自启开关
-
-### frp 协议全覆盖
-| 代理类型 | 说明 |
-|----------|------|
-| `tcp` / `udp` | 端口透传 |
-| `http` / `https` | 虚拟主机 / SNI 多域名复用 |
-| `tcpmux` | 基于 host 的 TCP 多路复用 |
-| `stcp` / `sudp` | 点对点加密 |
-| `xtcp` | NAT 穿透 P2P |
-
-| 插件类型 | 用途 |
-|----------|------|
-| `https2http` / `https2https` / `http2https` | 协议转换 |
-| `static_file` | 静态文件服务器 |
-| `unix_domain_socket` | Unix 套接字桥接 |
-| `http_proxy` / `socks5` | 代理服务 |
-
-通用 transport 选项一应俱全：`useEncryption` / `useCompression` / `bandwidthLimit` / `bandwidthLimitMode`。
-
-### 安全通信
-- **SNI 多域名复用**：单 443 端口承载无数 HTTPS 域名，通过 `customDomains` + `https2http` 插件自动分流
-- **SSL 证书管理**：`crtPath` / `keyPath` 可直接从系统对话框选择文件自动导入到应用证书目录
-- **请求头重写**：支持 `hostHeaderRewrite` 与 `requestHeaders.set` 键值对编辑
-
-### frpc 服务控制
-- 在线安装 / 切换任意历史版本（自动从 GitHub Release 获取版本列表）
-- **GitHub 镜像加速**（如 `https://ghproxy.com/`）解决国内下载慢问题
-- 一键启动 / 停止 / 重载配置，实时输出进程日志
-- 进程状态监控与异常自动恢复
-
-### 系统集成
-- **菜单栏托盘**：关闭主窗口时隐藏至托盘而非退出进程，托盘菜单提供：
-  - 显示 / 隐藏窗口
-  - 启停 frpc 服务
-  - 退出应用
-- **开机自启**（macOS via launchd；其它平台随后支持）
-- **跨平台统一图标**：橙色暖感品牌标识，dock / 托盘 / 窗口标题栏一致
-
-## 🚀 快速上手
-
-### 1. 服务端（frps）示例配置
+### 1. 服务端 frps 示例
 
 ```toml
 bindPort = 7000
-
-# HTTPS 多域名复用 443
 vhostHTTPSPort = 443
-
-auth.method = "token"
-auth.token  = "your-strong-token"
+auth.token = "your-strong-token"
 ```
 
-### 2. 打开 frpDesktop，完成两步
+域名（或通配符域名）解析到 frps 服务器。
 
-1. **设置** → 「frpc 二进制管理」→ 点击「刷新版本列表」→ 选择一个版本点「安装」
-2. **配置管理** → 填写服务端地址 / 端口 / token → 点击「新增代理」：
-   - 类型选 `https`
-   - `customDomains` 填你的域名，如 `cake.example.com`
-   - 插件选 `https2http`，配置 `localAddr` 为内部 HTTP 服务
-   - 选择 SSL 证书与私钥文件
+### 2. frpDesktop
 
-### 3. 回到**仪表盘**点「启动」，即可通过域名对外访问。
+1. **设置** → frpc 程序：选一个版本点「下载」（国内可先选镜像）
+2. **证书库** → 导入证书和私钥
+3. **代理配置** → 填写 frps 地址、端口、token → 「新建 HTTPS 站点」→ 填域名和本地地址（如 `127.0.0.1:8080`）→ 证书会自动选好 → 保存
+4. 点右上角「启动」，在概览页点域名即可访问 `https://你的域名`
 
-## 🛠 开发
+已有 `frpc.toml`？在「代理配置」点「导入 frpc.toml」即可。
 
-### 环境要求
-- Node.js ≥ 20, pnpm ≥ 9
-- Rust stable toolchain
-- Tauri 2 平台依赖（见 [Tauri 文档](https://v2.tauri.app/start/prerequisites/)）
+### 从 0.1.x 升级
 
-### 本地开发
-```bash
-git clone https://github.com/luckySpro/frpDesktop.git
-cd frpDesktop/app
-pnpm install
-pnpm tauri dev
-```
+- 数据目录、配置文件和证书目录不变，原有的 `bin/current` frpc 仍然可用
+- 旧版的 launchd 开机自启仍会被识别，可在「设置 → 后台服务」中管理
+- 0.1.x 用表单保存过的配置可能已经丢失了注释和部分字段，建议检查一次
 
-### 构建本机安装包
+## 数据位置
+
+| 内容 | 路径（应用数据目录下） |
+| --- | --- |
+| frpc 配置 | `profiles/default.toml` |
+| 证书库 | `certs/`（配置里写 `./certs/文件名`） |
+| frpc 程序 | `bin/frpc-v<版本>` |
+| 日志 | `logs/frpc.log`（超过 5 MB 自动轮转） |
+| 应用设置 | `settings.json` |
+
+frpc 的工作目录就是应用数据目录，所以配置中的相对路径都以它为基准。
+
+## 开发
+
+需要 Node.js ≥ 20、pnpm ≥ 9、Rust stable，以及 [Tauri 2 平台依赖](https://v2.tauri.app/start/prerequisites/)。
+
 ```bash
 cd app
-pnpm tauri build
-# 产物位于 src-tauri/target/release/bundle/
+pnpm install
+pnpm tauri dev          # 开发运行
+pnpm dev                # 只跑前端，浏览器中自动进入演示模式
+
+# 检查
+pnpm build
+cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+
+# 更新截图
+pnpm build && pnpm preview --port 4173 &
+node scripts/screenshots.mjs
 ```
 
-### 发布（多平台）
-推送 `v*` tag 会触发 [`.github/workflows/release.yml`](./.github/workflows/release.yml)，自动在 GitHub Actions 上为 macOS universal / Windows x64 / Linux x64 并行构建并上传到 Draft Release。
+推送 `v*` tag 会触发 [`release.yml`](./.github/workflows/release.yml) 构建 macOS universal / Windows x64 / Linux x64 安装包到 Draft Release；每个 PR 由 [`ci.yml`](./.github/workflows/ci.yml) 在三个平台上检查。
 
-```bash
-git tag -a v0.1.1 -m "frpDesktop v0.1.1"
-git push origin v0.1.1
-```
+## 技术栈
 
-## 🧱 技术栈
+- 前端：React 18 + Vite 5 + TypeScript + Ant Design 5 + Zustand + CodeMirror 6
+- 后端：Tauri 2 + Rust（`toml_edit` 无损编辑、`x509-parser` + `rustls` 证书检查、`tokio` 进程守护）
 
-- **前端**：React 18 + Vite 5 + TypeScript 5 + Ant Design 5 + Zustand + Monaco Editor
-- **后端**：Tauri 2 + Rust（`toml` / `toml_edit` / `tokio` 异步进程管理）
-- **打包**：tauri-cli + GitHub Actions (`tauri-apps/tauri-action`)
+## 反馈
 
-## 📐 项目结构
+Bug 反馈请附带操作系统、frpDesktop 与 frpc 版本、复现步骤和配置（**务必删除 token、证书和私钥**）。
 
-```
-frpDesktop/
-├── app/                   # 应用源码
-│   ├── src/              # React 前端
-│   ├── src-tauri/        # Rust 后端
-│   │   └── src/config/   # TOML 读写与模型
-│   └── package.json
-├── .github/workflows/    # CI/CD 发布流水线
-└── README.md
-```
+## License
 
-## 🤝 贡献
-
-欢迎 Issue 与 PR。Bug 反馈请附带：
-- 操作系统及版本
-- frpDesktop 版本
-- frpc 版本
-- 复现步骤与 TOML 配置（记得脱敏 token / 证书 / 私钥）
-
-## 📄 License
-
-MIT © [luckySpro](https://github.com/luckySpro)
+[GPL-3.0](./LICENSE) © [luckySpro](https://github.com/luckySpro)

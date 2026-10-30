@@ -1,59 +1,57 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
-import { ConfigProvider, theme } from "antd";
+import { App as AntApp, ConfigProvider, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import App from "./App";
+import { useApp } from "./store/app";
 import "./styles/global.css";
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
+function useResolvedTheme(): "light" | "dark" {
+  const pref = useApp((s) => s.settings?.theme ?? "system");
+  const forced = new URLSearchParams(location.search).get("theme");
+  const [sys, setSys] = useState(() => window.matchMedia("(prefers-color-scheme: dark)").matches);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const h = (e: MediaQueryListEvent) => setSys(e.matches);
+    mq.addEventListener("change", h);
+    return () => mq.removeEventListener("change", h);
+  }, []);
+  if (forced === "dark" || forced === "light") return forced;
+  if (pref === "dark" || pref === "light") return pref;
+  return sys ? "dark" : "light";
+}
+
+function Root() {
+  const mode = useResolvedTheme();
+  useEffect(() => {
+    document.documentElement.dataset.theme = mode;
+  }, [mode]);
+  return (
     <ConfigProvider
       locale={zhCN}
       theme={{
-        algorithm: theme.defaultAlgorithm,
+        algorithm: mode === "dark" ? theme.darkAlgorithm : theme.defaultAlgorithm,
         token: {
           colorPrimary: "#f97316",
-          colorInfo: "#f97316",
-          colorSuccess: "#10b981",
-          colorWarning: "#f59e0b",
-          colorError: "#ef4444",
           colorLink: "#f97316",
-          colorBgLayout: "#fff8f1",
-          borderRadius: 10,
+          colorSuccess: "#16a34a",
+          colorWarning: "#d97706",
+          colorError: "#dc2626",
+          borderRadius: 8,
           fontSize: 14,
-          wireframe: false,
-        },
-        components: {
-          Menu: {
-            darkItemBg: "transparent",
-            darkItemSelectedBg: "rgba(249, 115, 22, 0.2)",
-            darkItemHoverBg: "rgba(255,255,255,0.06)",
-            darkItemColor: "#fcd9b6",
-            darkItemSelectedColor: "#fff",
-          },
-          Button: {
-            primaryShadow: "0 4px 10px rgba(249, 115, 22, 0.25)",
-          },
-          Card: {
-            borderRadiusLG: 14,
-          },
-          Tabs: {
-            inkBarColor: "#f97316",
-            itemSelectedColor: "#ea580c",
-            itemHoverColor: "#f97316",
-          },
-          Switch: {
-            colorPrimary: "#f97316",
-            colorPrimaryHover: "#ea580c",
-          },
-          Tag: {
-            defaultBg: "#fff7ed",
-            defaultColor: "#9a3412",
-          },
+          colorBgLayout: mode === "dark" ? "#141210" : "#f7f5f2",
         },
       }}
     >
-      <App />
+      <AntApp>
+        <App />
+      </AntApp>
     </ConfigProvider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <Root />
   </React.StrictMode>
 );

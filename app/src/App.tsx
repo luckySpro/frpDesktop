@@ -1,215 +1,106 @@
 import { useEffect, useState } from "react";
-import { Layout, Menu, Modal, Button, Space, Typography } from "antd";
+import { Alert, Badge, Button } from "antd";
 import {
-  DashboardOutlined,
+  AppstoreOutlined,
+  ClusterOutlined,
+  SafetyCertificateOutlined,
   SettingOutlined,
-  FileTextOutlined,
-  ThunderboltOutlined,
 } from "@ant-design/icons";
-import { useAppStore } from "./store/app";
-import { api } from "./api/tauri";
-import Dashboard from "./pages/Dashboard";
-import Config from "./pages/Config";
+import { useApp } from "./store/app";
+import { useConfig } from "./store/config";
+import { isTauri } from "./api/tauri";
+import Overview from "./pages/Overview";
+import Proxies from "./pages/Proxies";
+import Certificates from "./pages/Certificates";
 import Settings from "./pages/Settings";
+import RunControls, { StatusPill } from "./components/RunControls";
 
-const { Sider, Content, Header } = Layout;
+export type Tab = "overview" | "proxies" | "certs" | "settings";
 
-type Tab = "dashboard" | "config" | "settings";
+const NAV: { key: Tab; label: string; icon: React.ReactNode }[] = [
+  { key: "overview", label: "概览", icon: <AppstoreOutlined /> },
+  { key: "proxies", label: "代理配置", icon: <ClusterOutlined /> },
+  { key: "certs", label: "证书库", icon: <SafetyCertificateOutlined /> },
+  { key: "settings", label: "设置", icon: <SettingOutlined /> },
+];
 
-const titleMap: Record<Tab, string> = {
-  dashboard: "状态面板",
-  config: "配置管理",
-  settings: "设置",
-};
+function initialTab(): Tab {
+  const t = new URLSearchParams(location.search).get("tab");
+  return NAV.some((n) => n.key === t) ? (t as Tab) : "overview";
+}
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>("dashboard");
-  const boot = useAppStore((s) => s.boot);
-  const paths = useAppStore((s) => s.paths);
-  const refreshPaths = useAppStore((s) => s.refreshPaths);
-  const [migrateOpen, setMigrateOpen] = useState(false);
+  const [tab, setTab] = useState<Tab>(initialTab);
+  const boot = useApp((s) => s.boot);
+  const info = useApp((s) => s.info);
+  const certs = useApp((s) => s.certs);
+  const loadConfig = useConfig((s) => s.load);
+  const dirty = useConfig((s) => s.dirty);
 
   useEffect(() => {
     boot();
-  }, [boot]);
+    loadConfig();
+  }, [boot, loadConfig]);
 
-  useEffect(() => {
-    if (!paths) return;
-    if (paths.profile_exists) return;
-    setMigrateOpen(true);
-  }, [paths?.profile_exists]);
-
-  const runMigrate = async () => {
-    try {
-      await api.migrateFromPath("/Users/lucky/Documents/WorkSapce/frpDesktop");
-      await refreshPaths();
-      setMigrateOpen(false);
-    } catch (e) {
-      alert(String(e));
-    }
-  };
+  const expiring = certs.filter((c) => c.cert && c.cert.daysLeft <= 15).length;
 
   return (
-    <Layout style={{ height: "100vh" }}>
-      <Sider
-        width={220}
-        theme="dark"
-        style={{
-          background:
-            "linear-gradient(180deg,#1c1917 0%,#2a1a10 55%,#3b1d0c 100%)",
-          position: "relative",
-          overflow: "hidden",
-        }}
-      >
-        {/* soft glow */}
-        <div
-          style={{
-            position: "absolute",
-            top: -80,
-            left: -60,
-            width: 260,
-            height: 260,
-            background:
-              "radial-gradient(circle, rgba(249,115,22,0.45) 0%, rgba(249,115,22,0) 70%)",
-            pointerEvents: "none",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            bottom: -120,
-            right: -80,
-            width: 280,
-            height: 280,
-            background:
-              "radial-gradient(circle, rgba(251,191,36,0.22) 0%, rgba(251,191,36,0) 70%)",
-            pointerEvents: "none",
-          }}
-        />
-        <div
-          style={{
-            position: "relative",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "20px 18px 18px",
-            color: "#fff",
-            letterSpacing: 0.5,
-          }}
-        >
-          <div
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 10,
-              background: "linear-gradient(135deg,#fb923c 0%,#f97316 55%,#fbbf24 100%)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#fff",
-              fontWeight: 800,
-              fontSize: 18,
-              boxShadow: "0 6px 16px rgba(249, 115, 22, 0.45)",
-            }}
+    <div className="shell">
+      <nav className="sider" aria-label="主导航">
+        <div className="brand">
+          <div className="brand-mark">f</div>
+          <div className="brand-text">
+            <div className="brand-name">frpDesktop</div>
+            <div className="brand-sub">frpc 桌面管家</div>
+          </div>
+        </div>
+        {NAV.map((n) => (
+          <button
+            key={n.key}
+            className={"nav-item" + (tab === n.key ? " active" : "")}
+            onClick={() => setTab(n.key)}
+            aria-current={tab === n.key ? "page" : undefined}
           >
-            f
-          </div>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600 }}>frpDesktop</div>
-            <div style={{ fontSize: 11, color: "#fcd9b6" }}>frpc 管家</div>
-          </div>
+            {n.icon}
+            <span>{n.label}</span>
+            {n.key === "proxies" && dirty && <Badge className="badge" status="warning" />}
+            {n.key === "certs" && expiring > 0 && <Badge className="badge" count={expiring} size="small" />}
+          </button>
+        ))}
+        <div className="sider-foot">
+          v{info?.appVersion ?? "—"}
+          {!isTauri && " · 演示模式"}
         </div>
-        <Menu
-          mode="inline"
-          theme="dark"
-          selectedKeys={[tab]}
-          style={{ background: "transparent", borderRight: 0, fontSize: 14, position: "relative" }}
-          onClick={({ key }) => setTab(key as Tab)}
-          items={[
-            {
-              key: "dashboard",
-              icon: <DashboardOutlined />,
-              label: "状态面板",
-            },
-            {
-              key: "config",
-              icon: <FileTextOutlined />,
-              label: "配置管理",
-            },
-            {
-              key: "settings",
-              icon: <SettingOutlined />,
-              label: "设置",
-            },
-          ]}
-        />
-        <div style={{ flex: 1 }} />
-        <div
-          style={{
-            position: "absolute",
-            bottom: 14,
-            left: 0,
-            right: 0,
-            padding: "0 18px",
-            color: "#fcd9b6",
-            fontSize: 11,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-          }}
-        >
-          <ThunderboltOutlined style={{ color: "#fbbf24" }} />
-          Lucky's Tool
-        </div>
-      </Sider>
-      <Layout
-        style={{
-          background:
-            "linear-gradient(180deg,#fff8f1 0%,#fff2e4 100%)",
-        }}
-      >
-        <Header
-          style={{
-            background: "#ffffff",
-            borderBottom: "1px solid #ffedd5",
-            padding: "0 24px",
-            display: "flex",
-            alignItems: "center",
-            height: 56,
-            boxShadow: "0 1px 2px rgba(0,0,0,0.02)",
-          }}
-        >
-          <Typography.Title level={5} style={{ margin: 0, color: "#7c2d12" }}>
-            {titleMap[tab]}
-          </Typography.Title>
-        </Header>
-        <Content style={{ padding: 20, overflow: "auto" }}>
-          {tab === "dashboard" && <Dashboard />}
-          {tab === "config" && <Config />}
-          {tab === "settings" && <Settings />}
-        </Content>
-      </Layout>
+      </nav>
 
-      <Modal
-        title="导入现有 frpc 配置"
-        open={migrateOpen}
-        onCancel={() => setMigrateOpen(false)}
-        footer={null}
-      >
-        <p>
-          检测到你的工作区 <code>/Users/lucky/Documents/WorkSapce/frpDesktop</code>
-          下存在 <code>frpc.toml</code>，是否一键导入到应用数据目录？
-        </p>
-        <p>
-          证书文件会一并复制到 <code>certs/</code> 并重写为相对路径。
-        </p>
-        <Space>
-          <Button type="primary" onClick={runMigrate}>
-            导入
-          </Button>
-          <Button onClick={() => setMigrateOpen(false)}>稍后</Button>
-        </Space>
-      </Modal>
-    </Layout>
+      <main className="main">
+        <header className="topbar">
+          <h1>{NAV.find((n) => n.key === tab)?.label}</h1>
+          <StatusPill />
+          <div className="spacer" />
+          <RunControls />
+        </header>
+        <div className="content">
+          {info && !info.frpcPath && tab !== "settings" && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 14 }}
+              message="还没有可用的 frpc"
+              description="在「设置」里一键下载官方 frpc（可走国内镜像），或指定已有的 frpc 程序路径。"
+              action={
+                <Button size="small" type="primary" onClick={() => setTab("settings")}>
+                  去设置
+                </Button>
+              }
+            />
+          )}
+          {tab === "overview" && <Overview onNavigate={setTab} />}
+          {tab === "proxies" && <Proxies />}
+          {tab === "certs" && <Certificates />}
+          {tab === "settings" && <Settings />}
+        </div>
+      </main>
+    </div>
   );
 }
