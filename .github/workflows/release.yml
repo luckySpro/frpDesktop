@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（如 0.2.0），会创建 tag v<版本号>"
+        required: true
 
 jobs:
   publish-tauri:
@@ -80,10 +84,11 @@ jobs:
         with:
           projectPath: app
           tauriScript: pnpm tauri
-          tagName: ${{ github.ref_name }}
-          releaseName: "frpDesktop ${{ github.ref_name }}"
+          tagName: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+          releaseName: "frpDesktop ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}"
+          commitish: ${{ github.sha }}
           releaseBody: |
-            frpDesktop ${{ github.ref_name }} — 跨平台 frpc 管家
+            frpDesktop — 跨平台 frpc 管家，专注 HTTPS + 自有证书的多域名场景
 
             ### 下载
             - **macOS (Apple Silicon & Intel)**：`*_universal.dmg`
