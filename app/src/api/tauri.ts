@@ -1,167 +1,112 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, Event, UnlistenFn } from "@tauri-apps/api/event";
+// Typed wrappers around the Tauri commands. Outside Tauri (plain browser,
+// screenshots) every call is served by the in-memory demo backend.
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import type {
+  AppInfo,
+  CertFile,
+  DaemonStatus,
+  FrpcForm,
+  ImportResult,
+  InstallProgress,
+  LoadedConfig,
+  LogLine,
+  RunnerStatus,
+  Settings,
+  ValidationReport,
+  VerifyResult,
+  VersionEntry,
+} from "./types";
 
-// ---- Types mirrored from Rust ----
+export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-export interface AppPaths {
-  data_dir: string;
-  bin_dir: string;
-  current_link: string;
-  profiles_dir: string;
-  default_profile: string;
-  certs_dir: string;
-  logs_dir: string;
-  log_file: string;
-}
-export interface PathsInfo {
-  paths: AppPaths;
-  profile_exists: boolean;
-  frpc_installed: boolean;
-}
+type Handler = (payload: unknown) => void;
 
-export interface VersionEntry {
-  tag: string;
-  version: string;
-  assetName?: string | null;
-  assetUrl?: string | null;
-  asset_name?: string | null;
-  asset_url?: string | null;
-  installed: boolean;
-}
-
-export interface PluginForm {
-  /** none | https2http | https2https | http2https | static_file | http_proxy | socks5 | unix_domain_socket */
-  type: string;
-  // 通用 / 反向代理类
-  localAddr?: string | null;
-  hostHeaderRewrite?: string | null;
-  crtPath?: string | null;
-  keyPath?: string | null;
-  requestHeadersSet?: Record<string, string>;
-  // unix_domain_socket
-  unixPath?: string | null;
-  // static_file
-  localPath?: string | null;
-  stripPrefix?: string | null;
-  // http_proxy / socks5 / static_file 鉴权
-  httpUser?: string | null;
-  httpPassword?: string | null;
-  username?: string | null;
-  password?: string | null;
-  /** 未知字段透传 */
-  extra?: Record<string, string>;
+async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (isTauri) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return invoke<T>(cmd, args);
+  }
+  const { mockInvoke } = await import("./mock");
+  return mockInvoke(cmd, args) as Promise<T>;
 }
 
-export interface ProxyForm {
-  name: string;
-  /** tcp | udp | http | https | tcpmux | stcp | sudp | xtcp */
-  type: string;
-  // 通用
-  localIp?: string | null;
-  localPort?: number | null;
-  remotePort?: number | null;
-  // http / https / tcpmux
-  customDomains?: string[];
-  subdomain?: string | null;
-  // http
-  locations?: string[];
-  httpUser?: string | null;
-  httpPassword?: string | null;
-  hostHeaderRewrite?: string | null;
-  // tcpmux
-  multiplexer?: string | null;
-  routeByHttpUser?: string | null;
-  // stcp / sudp / xtcp
-  secretKey?: string | null;
-  allowUsers?: string[];
-  // transport
-  useEncryption?: boolean | null;
-  useCompression?: boolean | null;
-  bandwidthLimit?: string | null;
-  bandwidthLimitMode?: string | null;
-  // 插件
-  plugin?: PluginForm | null;
+async function on<T>(event: string, handler: (p: T) => void): Promise<UnlistenFn> {
+  if (isTauri) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<T>(event, (e) => handler(e.payload));
+  }
+  const { mockListen } = await import("./mock");
+  return mockListen(event, handler as Handler);
 }
 
-export interface FrpcForm {
-  serverAddr: string;
-  serverPort: number;
-  auth: { token?: string | null };
-  proxies: ProxyForm[];
+/** Native file picker; returns selected absolute paths. */
+export async function pickFiles(opts: {
+  title: string;
+  multiple?: boolean;
+  extensions?: string[];
+  directory?: boolean;
+}): Promise<string[]> {
+  if (!isTauri) return [];
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const res = await open({
+    title: opts.title,
+    multiple: !!opts.multiple,
+    directory: !!opts.directory,
+    filters: opts.extensions ? [{ name: opts.title, extensions: opts.extensions }] : undefined,
+  });
+  if (!res) return [];
+  return Array.isArray(res) ? res : [res];
 }
-
-export type RunnerStatus =
-  | { status: "stopped" }
-  | { status: "starting" }
-  | { status: "running"; pid: number; since: string }
-  | { status: "exited"; code: number | null; at: string };
-
-export interface LaunchdStatus {
-  installed: boolean;
-  loaded: boolean;
-  plist_path: string;
-}
-
-export interface LogLine {
-  stream: "stdout" | "stderr" | "system";
-  line: string;
-}
-
-// ---- Commands ----
 
 export const api = {
-  pathsInfo: () => invoke<PathsInfo>("paths_info"),
-  revealInFinder: (path: string) => invoke<void>("reveal_in_finder", { path }),
+  appInfo: () => call<AppInfo>("app_info"),
+  revealPath: (path: string) => call<void>("reveal_path", { path }),
+  openUrl: (url: string) => call<void>("open_url", { url }),
 
-  migrateFromPath: (sourceDir: string) =>
-    invoke<string>("migrate_from_path", { sourceDir }),
+  settingsGet: () => call<Settings>("settings_get"),
+  settingsSave: (settings: Settings) => call<Settings>("settings_save", { settings }),
+  autostartGet: () => call<boolean>("autostart_get"),
+  autostartSet: (enabled: boolean) => call<boolean>("autostart_set", { enabled }),
 
-  configLoad: () => invoke<string>("config_load"),
-  configSave: (tomlText: string) => invoke<void>("config_save", { tomlText }),
-  configParseToForm: (tomlText: string) =>
-    invoke<FrpcForm>("config_parse_to_form", { tomlText }),
-  configFormToDoc: (form: FrpcForm) =>
-    invoke<string>("config_form_to_doc", { form }),
-  configValidate: (tomlText: string) =>
-    invoke<void>("config_validate", { tomlText }),
-  certPickAndImport: (srcPath: string) =>
-    invoke<string>("cert_pick_and_import", { srcPath }),
+  configLoad: () => call<LoadedConfig>("config_load"),
+  configParse: (text: string) => call<FrpcForm>("config_parse", { text }),
+  configRender: (original: string, form: FrpcForm) => call<string>("config_render", { original, form }),
+  configCheck: (text: string) => call<ValidationReport>("config_check", { text }),
+  configSave: (text: string, force = false) => call<ValidationReport>("config_save", { text, force }),
+  configVerify: (text: string) => call<VerifyResult>("config_verify", { text }),
+  configImport: (file: string) => call<ImportResult>("config_import", { file }),
 
-  frpcListVersions: (mirror?: string) =>
-    invoke<VersionEntry[]>("frpc_list_versions", { mirror }),
-  frpcInstall: (version: string, url: string, mirror?: string) =>
-    invoke<string>("frpc_install", { version, url, mirror }),
-  frpcCurrentVersion: () => invoke<string | null>("frpc_current_version"),
+  certsList: () => call<CertFile[]>("certs_list"),
+  certsImport: (files: string[]) => call<string[]>("certs_import", { files }),
+  certsDelete: (fileName: string) => call<void>("certs_delete", { fileName }),
 
-  runnerStart: () => invoke<RunnerStatus>("runner_start"),
-  runnerStop: () => invoke<RunnerStatus>("runner_stop"),
-  runnerStatus: () => invoke<RunnerStatus>("runner_status"),
-  runnerTailLog: (lines?: number) =>
-    invoke<string[]>("runner_tail_log", { lines: lines ?? 500 }),
+  frpcListVersions: () => call<VersionEntry[]>("frpc_list_versions"),
+  frpcInstalled: () => call<string[]>("frpc_installed"),
+  frpcInstall: (entry: VersionEntry) => call<Settings>("frpc_install", { entry }),
+  frpcUse: (version: string) => call<Settings>("frpc_use", { version }),
+  frpcUninstall: (version: string) => call<void>("frpc_uninstall", { version }),
 
-  launchdStatus: () => invoke<LaunchdStatus>("launchd_status"),
-  launchdEnable: () => invoke<LaunchdStatus>("launchd_enable"),
-  launchdDisable: () => invoke<LaunchdStatus>("launchd_disable"),
+  runnerStart: () => call<RunnerStatus>("runner_start"),
+  runnerStop: () => call<RunnerStatus>("runner_stop"),
+  runnerRestart: () => call<RunnerStatus>("runner_restart"),
+  runnerStatus: () => call<RunnerStatus>("runner_status"),
+  runnerTailLog: (lines = 500) => call<string[]>("runner_tail_log", { lines }),
+  runnerClearLog: () => call<void>("runner_clear_log"),
+
+  daemonStatus: () => call<DaemonStatus>("daemon_status"),
+  daemonEnable: () => call<DaemonStatus>("daemon_enable"),
+  daemonDisable: () => call<DaemonStatus>("daemon_disable"),
+  daemonRestart: () => call<DaemonStatus>("daemon_restart"),
 };
 
-// ---- Events ----
+export const events = {
+  onLog: (h: (l: LogLine) => void) => on<LogLine>("frpc://log", h),
+  onStatus: (h: (s: RunnerStatus) => void) => on<RunnerStatus>("frpc://status", h),
+  onInstallProgress: (h: (p: InstallProgress) => void) => on<InstallProgress>("frpc://install-progress", h),
+};
 
-export function onLog(handler: (l: LogLine) => void): Promise<UnlistenFn> {
-  return listen<LogLine>("frpc://log", (e: Event<LogLine>) => handler(e.payload));
-}
-
-export function onStatus(
-  handler: (s: RunnerStatus) => void
-): Promise<UnlistenFn> {
-  return listen<RunnerStatus>("frpc://status", (e: Event<RunnerStatus>) => handler(e.payload));
-}
-
-export function onInstallProgress(
-  handler: (p: { version: string; downloaded: number; total: number }) => void
-): Promise<UnlistenFn> {
-  return listen<{ version: string; downloaded: number; total: number }>(
-    "frpc://install-progress",
-    (e: Event<{ version: string; downloaded: number; total: number }>) =>
-      handler(e.payload)
-  );
+export function errText(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  return String(e);
 }

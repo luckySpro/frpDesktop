@@ -1,24 +1,31 @@
 //! frpDesktop backend library entry.
 
-mod paths;
-mod error;
-mod config;
-mod frpc;
-mod runner;
+mod certs;
 mod commands;
+mod config;
+mod error;
+mod frpc;
+mod fsutil;
+mod paths;
+mod runner;
+mod settings;
 
 use std::sync::Arc;
+
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WindowEvent};
 use tokio::sync::Mutex;
 
-use crate::runner::process::RunnerState;
+use crate::runner::process::{Runner, SharedRunner};
 
 /// Shared application state.
 pub struct AppState {
-    pub runner: Arc<Mutex<RunnerState>>,
+    pub runner: SharedRunner,
 }
+
+/// Command line flag passed by the login item so the app starts in the tray.
+const MINIMIZED_FLAG: &str = "--minimized";
 
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -26,11 +33,29 @@ fn show_main_window(app: &tauri::AppHandle) {
         let _ = w.show();
         let _ = w.set_focus();
     }
-    // Make sure the app also becomes frontmost on macOS.
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
-    }
+}
+
+fn spawn_start(app: &tauri::AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state: tauri::State<AppState> = app.state();
+        if let Err(e) = commands::start_frpc(&app, &state).await {
+            tracing::warn!("start frpc failed: {e}");
+            let _ = tauri::Emitter::emit(
+                &app,
+                "frpc://log",
+                serde_json::json!({ "stream": "system", "line": format!("[frpDesktop] {e}") }),
+            );
+        }
+    });
+}
+
+fn spawn_stop(app: &tauri::AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state: tauri::State<AppState> = app.state();
+        let _ = runner::process::stop(&app, state.runner.clone()).await;
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -44,11 +69,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![MINIMIZED_FLAG]),
+        ))
         .on_window_event(|window, event| {
-            // Intercept close: hide window instead of exiting.
+            // Closing the main window hides it to the tray; frpc keeps running.
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     api.prevent_close();
@@ -57,60 +84,61 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            let state = AppState {
-                runner: Arc::new(Mutex::new(RunnerState::Stopped)),
-            };
-            app.manage(state);
+            app.manage(AppState {
+                runner: Arc::new(Mutex::new(Runner::default())),
+            });
 
-            // Ensure application data directories exist on first launch.
-            if let Err(e) = crate::paths::ensure_app_dirs(&app.handle()) {
-                tracing::error!("ensure_app_dirs failed: {e:#}");
+            let paths = match paths::ensure_app_dirs(app.handle()) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    tracing::error!("ensure_app_dirs failed: {e:#}");
+                    None
+                }
+            };
+
+            if std::env::args().any(|a| a == MINIMIZED_FLAG) {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.hide();
+                }
             }
 
-            // Build tray menu.
-            let show_item =
-                MenuItemBuilder::with_id("show", "显示主窗口").build(app)?;
-            let start_item =
-                MenuItemBuilder::with_id("start", "启动 frpc").build(app)?;
-            let stop_item =
-                MenuItemBuilder::with_id("stop", "停止 frpc").build(app)?;
+            let show_item = MenuItemBuilder::with_id("show", "显示主窗口").build(app)?;
+            let start_item = MenuItemBuilder::with_id("start", "启动 frpc").build(app)?;
+            let stop_item = MenuItemBuilder::with_id("stop", "停止 frpc").build(app)?;
+            let restart_item = MenuItemBuilder::with_id("restart", "重启 frpc").build(app)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
-            let quit_item =
-                MenuItemBuilder::with_id("quit", "退出 frpDesktop").build(app)?;
-
+            let quit_item = MenuItemBuilder::with_id("quit", "退出 frpDesktop").build(app)?;
             let menu = MenuBuilder::new(app)
                 .items(&[
-                    &show_item, &sep1, &start_item, &stop_item, &sep2, &quit_item,
+                    &show_item,
+                    &sep1,
+                    &start_item,
+                    &stop_item,
+                    &restart_item,
+                    &sep2,
+                    &quit_item,
                 ])
                 .build()?;
 
-            let mut tray_builder = TrayIconBuilder::with_id("main")
+            let mut tray = TrayIconBuilder::with_id("main")
                 .tooltip("frpDesktop · frpc 管家")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| {
-                    match event.id.as_ref() {
-                        "show" => show_main_window(app),
-                        "quit" => app.exit(0),
-                        "start" => {
-                            let app = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                if let Err(e) = run_frpc_start(&app).await {
-                                    tracing::warn!("tray start failed: {e:#}");
-                                }
-                            });
-                        }
-                        "stop" => {
-                            let app = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                if let Err(e) = run_frpc_stop(&app).await {
-                                    tracing::warn!("tray stop failed: {e:#}");
-                                }
-                            });
-                        }
-                        _ => {}
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => app.exit(0),
+                    "start" => spawn_start(app),
+                    "stop" => spawn_stop(app),
+                    "restart" => {
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let state: tauri::State<AppState> = app.state();
+                            let _ = runner::process::stop(&app, state.runner.clone()).await;
+                            spawn_start(&app);
+                        });
                     }
+                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
@@ -122,76 +150,71 @@ pub fn run() {
                         show_main_window(tray.app_handle());
                     }
                 });
-
             if let Some(icon) = app.default_window_icon().cloned() {
-                tray_builder = tray_builder.icon(icon);
+                tray = tray.icon(icon);
             }
-            tray_builder.build(app)?;
+            tray.build(app)?;
 
+            if let Some(p) = paths {
+                let s = p.settings();
+                if s.start_frpc_on_launch && p.default_profile.exists() {
+                    spawn_start(app.handle());
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // paths
-            crate::commands::paths_info,
-            crate::commands::reveal_in_finder,
-            // migration
-            crate::commands::migrate_from_path,
-            // config
-            crate::commands::config_load,
-            crate::commands::config_save,
-            crate::commands::config_parse_to_form,
-            crate::commands::config_form_to_doc,
-            crate::commands::config_validate,
-            crate::commands::cert_pick_and_import,
-            // frpc
-            crate::commands::frpc_list_versions,
-            crate::commands::frpc_install,
-            crate::commands::frpc_current_version,
-            // runner
-            crate::commands::runner_start,
-            crate::commands::runner_stop,
-            crate::commands::runner_status,
-            crate::commands::runner_tail_log,
-            // launchd
-            crate::commands::launchd_status,
-            crate::commands::launchd_enable,
-            crate::commands::launchd_disable,
+            commands::app_info,
+            commands::reveal_path,
+            commands::open_url,
+            commands::settings_get,
+            commands::settings_save,
+            commands::autostart_get,
+            commands::autostart_set,
+            commands::config_load,
+            commands::config_parse,
+            commands::config_render,
+            commands::config_check,
+            commands::config_save,
+            commands::config_verify,
+            commands::config_import,
+            commands::certs_list,
+            commands::certs_import,
+            commands::certs_delete,
+            commands::frpc_list_versions,
+            commands::frpc_installed,
+            commands::frpc_install,
+            commands::frpc_use,
+            commands::frpc_uninstall,
+            commands::runner_start,
+            commands::runner_stop,
+            commands::runner_restart,
+            commands::runner_status,
+            commands::runner_tail_log,
+            commands::runner_clear_log,
+            commands::daemon_status,
+            commands::daemon_enable,
+            commands::daemon_disable,
+            commands::daemon_restart,
         ])
         .build(tauri::generate_context!())
         .expect("error while running frpDesktop")
-        .run(|app_handle, event| {
-            // macOS: 主窗口被关闭到 Dock 后，点击 Dock 图标恢复窗口。
+        .run(|app_handle, event| match event {
+            // Never leave an orphaned frpc behind when the app quits.
+            tauri::RunEvent::Exit => {
+                let state: tauri::State<AppState> = app_handle.state();
+                let runner = state.runner.clone();
+                let app = app_handle.clone();
+                tauri::async_runtime::block_on(async move {
+                    let _ = runner::process::stop(&app, runner).await;
+                });
+            }
+            // macOS: clicking the Dock icon brings the hidden window back.
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
-                if !has_visible_windows {
-                    show_main_window(app_handle);
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                let _ = app_handle;
-                let _ = event;
-            }
+            tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } => show_main_window(app_handle),
+            _ => {}
         });
-}
-
-async fn run_frpc_start(app: &tauri::AppHandle) -> anyhow::Result<()> {
-    let state: tauri::State<AppState> = app.state();
-    let paths = crate::paths::resolve(app)?;
-    let frpc_bin = paths.current_link.clone();
-    let profile = paths.default_profile.clone();
-    let cwd = paths.data_dir.clone();
-    let log_file = paths.log_file.clone();
-    crate::runner::process::start(app, state.runner.clone(), &frpc_bin, &profile, &cwd, &log_file)
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(())
-}
-
-async fn run_frpc_stop(app: &tauri::AppHandle) -> anyhow::Result<()> {
-    let state: tauri::State<AppState> = app.state();
-    crate::runner::process::stop(app, state.runner.clone())
-        .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(())
 }

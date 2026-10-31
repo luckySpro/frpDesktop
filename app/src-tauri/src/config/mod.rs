@@ -1,32 +1,48 @@
-//! TOML-based frpc configuration model and conversion.
+//! frpc TOML configuration model, lossless save and validation.
 //!
 //! Editing strategy:
-//! - The source-of-truth persisted on disk is the raw TOML text.
-//! - For the form view, we parse TOML into a typed `FrpcForm` and serialize back.
-//! - To preserve comments / field order when the user edits only form fields,
-//!   we apply edits via `toml_edit::DocumentMut` over the previous document.
+//! - The source of truth on disk is the raw TOML text.
+//! - The form view works on a typed `FrpcForm` that only covers the fields the
+//!   UI knows about.
+//! - Saving the form never regenerates the file from scratch. `apply_form`
+//!   edits the previous `toml_edit` document in place, so comments, key order,
+//!   dotted-key style and every field the form does not model (log, transport,
+//!   webServer, healthCheck, metadatas …) survive a round trip.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
-use toml_edit::{value, Array, DocumentMut, Item, Table};
+use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
 
 use crate::error::{AppError, AppResult};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub const PROXY_TYPES: [&str; 8] = [
+    "tcp", "udp", "http", "https", "tcpmux", "stcp", "sudp", "xtcp",
+];
+pub const PLUGIN_TYPES: [&str; 8] = [
+    "https2http",
+    "https2https",
+    "http2https",
+    "http_proxy",
+    "socks5",
+    "static_file",
+    "unix_domain_socket",
+    "tls2raw",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginForm {
-    /// none | https2http | https2https | http2https | static_file | http_proxy | socks5 | unix_domain_socket
+    /// https2http | https2https | http2https | static_file | http_proxy | socks5 | unix_domain_socket | tls2raw
     #[serde(rename = "type")]
     pub kind: String,
-    // 反向代理类
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_addr: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -35,52 +51,46 @@ pub struct PluginForm {
     pub crt_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_path: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub request_headers_set: BTreeMap<String, String>,
-    // unix_domain_socket
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unix_path: Option<String>,
-    // static_file
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strip_prefix: Option<String>,
-    // http_proxy / static_file 鉴权
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_password: Option<String>,
-    // socks5 鉴权
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
-    /// Additional free-form fields for forward compatibility.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub extra: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyForm {
+    /// Index of this proxy in the document it was parsed from. New proxies have
+    /// `None`. Used by `apply_form` to keep untouched fields and comments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<usize>,
     pub name: String,
     /// tcp | udp | http | https | tcpmux | stcp | sudp | xtcp
     #[serde(rename = "type")]
     pub kind: String,
-    // 通用
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_ip: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_port: Option<u16>,
-    // http / https / tcpmux
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub custom_domains: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subdomain: Option<String>,
-    // http
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub locations: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_user: Option<String>,
@@ -88,17 +98,14 @@ pub struct ProxyForm {
     pub http_password: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_header_rewrite: Option<String>,
-    // tcpmux
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multiplexer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route_by_http_user: Option<String>,
-    // stcp / sudp / xtcp
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub allow_users: Vec<String>,
-    // transport
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub use_encryption: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -107,20 +114,37 @@ pub struct ProxyForm {
     pub bandwidth_limit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bandwidth_limit_mode: Option<String>,
-    // 插件
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<PluginForm>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FrpcForm {
     pub server_addr: String,
     pub server_port: u16,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
     #[serde(default)]
     pub proxies: Vec<ProxyForm>,
+}
+
+/// Template used when no profile exists yet.
+pub const DEFAULT_TEMPLATE: &str = r#"# frpc 配置，由 frpDesktop 管理
+serverAddr = ""
+serverPort = 7000
+
+[auth]
+token = ""
+"#;
+
+// ---------------------------------------------------------------- parse
+
+fn port_from(v: Option<&toml::Value>) -> Option<u16> {
+    v.and_then(|v| v.as_integer())
+        .and_then(|n| u16::try_from(n).ok())
 }
 
 /// Parse an existing TOML text into a typed form.
@@ -131,21 +155,26 @@ pub fn parse_to_form(toml_text: &str) -> AppResult<FrpcForm> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let server_port = raw
-        .get("serverPort")
-        .and_then(|v| v.as_integer())
-        .unwrap_or(7000) as u16;
+    let server_port = match raw.get("serverPort") {
+        None => 7000,
+        Some(v) => {
+            port_from(Some(v)).ok_or_else(|| AppError::msg("serverPort 必须是 1-65535 的整数"))?
+        }
+    };
 
     let mut auth = AuthConfig::default();
     if let Some(t) = raw.get("auth").and_then(|v| v.as_table()) {
         auth.token = t.get("token").and_then(|v| v.as_str()).map(String::from);
     }
+    let user = raw.get("user").and_then(|v| v.as_str()).map(String::from);
 
-    let mut proxies: Vec<ProxyForm> = Vec::new();
+    let mut proxies = Vec::new();
     if let Some(arr) = raw.get("proxies").and_then(|v| v.as_array()) {
-        for item in arr {
+        for (i, item) in arr.iter().enumerate() {
             if let Some(tbl) = item.as_table() {
-                proxies.push(proxy_from_table(tbl));
+                let mut p = proxy_from_table(tbl);
+                p.origin = Some(i);
+                proxies.push(p);
             }
         }
     }
@@ -154,13 +183,13 @@ pub fn parse_to_form(toml_text: &str) -> AppResult<FrpcForm> {
         server_addr,
         server_port,
         auth,
+        user,
         proxies,
     })
 }
 
 fn proxy_from_table(tbl: &toml::value::Table) -> ProxyForm {
     let get_str = |k: &str| tbl.get(k).and_then(|v| v.as_str()).map(String::from);
-    let get_u16 = |k: &str| tbl.get(k).and_then(|v| v.as_integer()).map(|n| n as u16);
     let get_str_arr = |k: &str| -> Vec<String> {
         tbl.get(k)
             .and_then(|v| v.as_array())
@@ -172,57 +201,26 @@ fn proxy_from_table(tbl: &toml::value::Table) -> ProxyForm {
             .unwrap_or_default()
     };
 
-    // transport.* 嵌套表
-    let (use_encryption, use_compression, bandwidth_limit, bandwidth_limit_mode) =
-        if let Some(tr) = tbl.get("transport").and_then(|v| v.as_table()) {
-            (
-                tr.get("useEncryption").and_then(|v| v.as_bool()),
-                tr.get("useCompression").and_then(|v| v.as_bool()),
-                tr.get("bandwidthLimit").and_then(|v| v.as_str()).map(String::from),
-                tr.get("bandwidthLimitMode").and_then(|v| v.as_str()).map(String::from),
-            )
-        } else {
-            (None, None, None, None)
-        };
+    let tr = tbl.get("transport").and_then(|v| v.as_table());
+    let tr_get = |k: &str| tr.and_then(|t| t.get(k));
 
     let plugin = tbl.get("plugin").and_then(|v| v.as_table()).map(|p| {
-        let mut request_headers_set: BTreeMap<String, String> = BTreeMap::new();
-        if let Some(rh) = p.get("requestHeaders").and_then(|v| v.as_table()) {
-            if let Some(set) = rh.get("set").and_then(|v| v.as_table()) {
-                for (k, v) in set.iter() {
-                    if let Some(s) = v.as_str() {
-                        request_headers_set.insert(k.clone(), s.to_string());
-                    }
+        let mut request_headers_set = BTreeMap::new();
+        if let Some(set) = p
+            .get("requestHeaders")
+            .and_then(|v| v.as_table())
+            .and_then(|rh| rh.get("set"))
+            .and_then(|v| v.as_table())
+        {
+            for (k, v) in set {
+                if let Some(s) = v.as_str() {
+                    request_headers_set.insert(k.clone(), s.to_string());
                 }
-            }
-        }
-        let known = [
-            "type",
-            "localAddr",
-            "crtPath",
-            "keyPath",
-            "hostHeaderRewrite",
-            "requestHeaders",
-            "unixPath",
-            "localPath",
-            "stripPrefix",
-            "httpUser",
-            "httpPassword",
-            "username",
-            "password",
-        ];
-        let mut extra: BTreeMap<String, String> = BTreeMap::new();
-        for (k, v) in p.iter() {
-            if known.contains(&k.as_str()) {
-                continue;
-            }
-            if let Some(s) = v.as_str() {
-                extra.insert(k.clone(), s.to_string());
             }
         }
         let pget = |k: &str| p.get(k).and_then(|v| v.as_str()).map(String::from);
         PluginForm {
-            kind: p.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            kind: pget("type").unwrap_or_default(),
             local_addr: pget("localAddr"),
             host_header_rewrite: pget("hostHeaderRewrite"),
             crt_path: pget("crtPath"),
@@ -235,16 +233,16 @@ fn proxy_from_table(tbl: &toml::value::Table) -> ProxyForm {
             http_password: pget("httpPassword"),
             username: pget("username"),
             password: pget("password"),
-            extra,
         }
     });
 
     ProxyForm {
+        origin: None,
         name: get_str("name").unwrap_or_default(),
         kind: get_str("type").unwrap_or_else(|| "tcp".into()),
         local_ip: get_str("localIP").or_else(|| get_str("localIp")),
-        local_port: get_u16("localPort"),
-        remote_port: get_u16("remotePort"),
+        local_port: port_from(tbl.get("localPort")),
+        remote_port: port_from(tbl.get("remotePort")),
         custom_domains: get_str_arr("customDomains"),
         subdomain: get_str("subdomain"),
         locations: get_str_arr("locations"),
@@ -255,397 +253,434 @@ fn proxy_from_table(tbl: &toml::value::Table) -> ProxyForm {
         route_by_http_user: get_str("routeByHTTPUser").or_else(|| get_str("routeByHttpUser")),
         secret_key: get_str("secretKey"),
         allow_users: get_str_arr("allowUsers"),
-        use_encryption,
-        use_compression,
-        bandwidth_limit,
-        bandwidth_limit_mode,
+        use_encryption: tr_get("useEncryption").and_then(|v| v.as_bool()),
+        use_compression: tr_get("useCompression").and_then(|v| v.as_bool()),
+        bandwidth_limit: tr_get("bandwidthLimit")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        bandwidth_limit_mode: tr_get("bandwidthLimitMode")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         plugin,
     }
 }
 
-/// Render the whole form into a fresh TOML document.
-pub fn form_to_toml(form: &FrpcForm) -> AppResult<String> {
-    let mut doc = DocumentMut::new();
-    doc["serverAddr"] = value(form.server_addr.clone());
-    doc["serverPort"] = value(form.server_port as i64);
-    if let Some(tk) = form.auth.token.clone() {
-        let mut t = Table::new();
-        t.set_implicit(false);
-        t["token"] = value(tk);
-        doc["auth"] = Item::Table(t);
+// ---------------------------------------------------------------- write
+
+/// Set `key` to `v`, keeping the decor (inline comments / spacing) of an
+/// existing value so `name = "x"   # 备注` keeps its comment.
+fn set_value(t: &mut Table, key: &str, mut v: Value) {
+    if let Some(Item::Value(old)) = t.get(key) {
+        if old.to_string().trim() == v.to_string().trim() {
+            return;
+        }
+        let decor = old.decor().clone();
+        *v.decor_mut() = decor;
     }
-    let mut arr = toml_edit::ArrayOfTables::new();
-    for p in &form.proxies {
-        arr.push(proxy_to_table(p));
-    }
-    doc["proxies"] = Item::ArrayOfTables(arr);
-    Ok(doc.to_string())
+    t.insert(key, Item::Value(v));
 }
 
-fn proxy_to_table(p: &ProxyForm) -> Table {
-    let mut t = Table::new();
-    t["name"] = value(p.name.clone());
-    t["type"] = value(p.kind.clone());
-    if let Some(ip) = &p.local_ip {
-        t["localIP"] = value(ip.clone());
-    }
-    if let Some(port) = p.local_port {
-        t["localPort"] = value(port as i64);
-    }
-    if let Some(port) = p.remote_port {
-        t["remotePort"] = value(port as i64);
-    }
-    if !p.custom_domains.is_empty() {
-        let mut a = Array::new();
-        for d in &p.custom_domains {
-            a.push(d.clone());
+fn set_opt_str(t: &mut Table, key: &str, v: &Option<String>) {
+    match v.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => set_value(t, key, Value::from(s)),
+        None => {
+            t.remove(key);
         }
-        t["customDomains"] = value(a);
     }
-    if let Some(sd) = &p.subdomain {
-        t["subdomain"] = value(sd.clone());
-    }
-    if !p.locations.is_empty() {
-        let mut a = Array::new();
-        for d in &p.locations {
-            a.push(d.clone());
-        }
-        t["locations"] = value(a);
-    }
-    if let Some(v) = &p.http_user {
-        t["httpUser"] = value(v.clone());
-    }
-    if let Some(v) = &p.http_password {
-        t["httpPassword"] = value(v.clone());
-    }
-    if let Some(v) = &p.host_header_rewrite {
-        t["hostHeaderRewrite"] = value(v.clone());
-    }
-    if let Some(v) = &p.multiplexer {
-        t["multiplexer"] = value(v.clone());
-    }
-    if let Some(v) = &p.route_by_http_user {
-        t["routeByHTTPUser"] = value(v.clone());
-    }
-    if let Some(v) = &p.secret_key {
-        t["secretKey"] = value(v.clone());
-    }
-    if !p.allow_users.is_empty() {
-        let mut a = Array::new();
-        for d in &p.allow_users {
-            a.push(d.clone());
-        }
-        t["allowUsers"] = value(a);
-    }
+}
 
-    // transport.* 嵌套表
-    let need_transport = p.use_encryption.is_some()
-        || p.use_compression.is_some()
-        || p.bandwidth_limit.is_some()
-        || p.bandwidth_limit_mode.is_some();
-    if need_transport {
-        let mut tr = Table::new();
-        tr.set_implicit(false);
-        if let Some(b) = p.use_encryption {
-            tr["useEncryption"] = value(b);
+fn set_opt_int(t: &mut Table, key: &str, v: Option<u16>) {
+    match v {
+        Some(n) => set_value(t, key, Value::from(n as i64)),
+        None => {
+            t.remove(key);
         }
-        if let Some(b) = p.use_compression {
-            tr["useCompression"] = value(b);
-        }
-        if let Some(v) = &p.bandwidth_limit {
-            tr["bandwidthLimit"] = value(v.clone());
-        }
-        if let Some(v) = &p.bandwidth_limit_mode {
-            tr["bandwidthLimitMode"] = value(v.clone());
-        }
-        t["transport"] = Item::Table(tr);
     }
+}
 
-    if let Some(pl) = &p.plugin {
-        let mut pt = Table::new();
-        pt.set_implicit(false);
-        pt["type"] = value(pl.kind.clone());
-        if let Some(v) = &pl.local_addr {
-            pt["localAddr"] = value(v.clone());
+fn set_opt_bool(t: &mut Table, key: &str, v: Option<bool>) {
+    match v {
+        Some(b) => set_value(t, key, Value::from(b)),
+        None => {
+            t.remove(key);
         }
-        if let Some(v) = &pl.host_header_rewrite {
-            pt["hostHeaderRewrite"] = value(v.clone());
+    }
+}
+
+fn set_str_arr(t: &mut Table, key: &str, v: &[String]) {
+    let items: Vec<&str> = v
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if items.is_empty() {
+        t.remove(key);
+        return;
+    }
+    let mut a = Array::new();
+    for s in items {
+        a.push(s);
+    }
+    set_value(t, key, Value::Array(a));
+}
+
+/// Get (or create) a sub-table, preserving whether the original was written
+/// as dotted keys (`transport.useEncryption = true`) or a `[section]`.
+fn sub_table<'a>(t: &'a mut Table, key: &str, dotted_default: bool) -> &'a mut Table {
+    let needs_new = !matches!(t.get(key), Some(Item::Table(_)));
+    if needs_new {
+        // Inline tables are converted to regular tables so we can edit them.
+        let mut nt = match t.remove(key) {
+            Some(Item::Value(Value::InlineTable(it))) => it.into_table(),
+            _ => Table::new(),
+        };
+        nt.set_dotted(dotted_default);
+        nt.set_implicit(dotted_default);
+        t.insert(key, Item::Table(nt));
+    }
+    match t.get_mut(key) {
+        Some(Item::Table(st)) => st,
+        _ => unreachable!("sub_table inserted a table above"),
+    }
+}
+
+fn drop_if_empty(t: &mut Table, key: &str) {
+    if let Some(Item::Table(st)) = t.get(key) {
+        if st.is_empty() {
+            t.remove(key);
         }
-        if let Some(v) = &pl.crt_path {
-            pt["crtPath"] = value(v.clone());
+    }
+}
+
+fn apply_plugin(t: &mut Table, pl: &Option<PluginForm>) {
+    let pl = match pl {
+        Some(p) if !p.kind.trim().is_empty() && p.kind != "none" => p,
+        _ => {
+            t.remove("plugin");
+            return;
         }
-        if let Some(v) = &pl.key_path {
-            pt["keyPath"] = value(v.clone());
-        }
-        if let Some(v) = &pl.unix_path {
-            pt["unixPath"] = value(v.clone());
-        }
-        if let Some(v) = &pl.local_path {
-            pt["localPath"] = value(v.clone());
-        }
-        if let Some(v) = &pl.strip_prefix {
-            pt["stripPrefix"] = value(v.clone());
-        }
-        if let Some(v) = &pl.http_user {
-            pt["httpUser"] = value(v.clone());
-        }
-        if let Some(v) = &pl.http_password {
-            pt["httpPassword"] = value(v.clone());
-        }
-        if let Some(v) = &pl.username {
-            pt["username"] = value(v.clone());
-        }
-        if let Some(v) = &pl.password {
-            pt["password"] = value(v.clone());
-        }
-        if !pl.request_headers_set.is_empty() {
-            let mut rh = Table::new();
-            rh.set_implicit(false);
-            let mut set = Table::new();
-            set.set_implicit(false);
-            for (k, v) in pl.request_headers_set.iter() {
-                set[k.as_str()] = value(v.clone());
+    };
+    let pt = sub_table(t, "plugin", false);
+    let type_changed = pt
+        .get("type")
+        .and_then(|i| i.as_str())
+        .map(|old| old != pl.kind)
+        .unwrap_or(false);
+    if type_changed {
+        // Fields of the old plugin type are meaningless for the new one.
+        let keys: Vec<String> = pt.iter().map(|(k, _)| k.to_string()).collect();
+        for k in keys {
+            if k != "type" {
+                pt.remove(&k);
             }
-            rh["set"] = Item::Table(set);
-            pt["requestHeaders"] = Item::Table(rh);
         }
-        for (k, v) in pl.extra.iter() {
-            pt[k.as_str()] = value(v.clone());
-        }
-        t["plugin"] = Item::Table(pt);
     }
-    t
+    set_value(pt, "type", Value::from(pl.kind.as_str()));
+    set_opt_str(pt, "localAddr", &pl.local_addr);
+    set_opt_str(pt, "hostHeaderRewrite", &pl.host_header_rewrite);
+    set_opt_str(pt, "crtPath", &pl.crt_path);
+    set_opt_str(pt, "keyPath", &pl.key_path);
+    set_opt_str(pt, "unixPath", &pl.unix_path);
+    set_opt_str(pt, "localPath", &pl.local_path);
+    set_opt_str(pt, "stripPrefix", &pl.strip_prefix);
+    set_opt_str(pt, "httpUser", &pl.http_user);
+    set_opt_str(pt, "httpPassword", &pl.http_password);
+    set_opt_str(pt, "username", &pl.username);
+    set_opt_str(pt, "password", &pl.password);
+
+    let headers: BTreeMap<&str, &str> = pl
+        .request_headers_set
+        .iter()
+        .map(|(k, v)| (k.trim(), v.as_str()))
+        .filter(|(k, _)| !k.is_empty())
+        .collect();
+    if headers.is_empty() {
+        if let Some(Item::Table(rh)) = pt.get_mut("requestHeaders") {
+            rh.remove("set");
+        }
+        drop_if_empty(pt, "requestHeaders");
+    } else {
+        let rh = sub_table(pt, "requestHeaders", true);
+        let set = sub_table(rh, "set", true);
+        let existing: Vec<String> = set.iter().map(|(k, _)| k.to_string()).collect();
+        for k in existing {
+            if !headers.contains_key(k.as_str()) {
+                set.remove(&k);
+            }
+        }
+        for (k, v) in headers {
+            set_value(set, k, Value::from(v));
+        }
+    }
 }
 
-/// Validate syntax + required fields.
-pub fn validate(toml_text: &str) -> AppResult<()> {
-    let form = parse_to_form(toml_text)?;
-    if form.server_addr.is_empty() {
-        return Err(AppError::msg("serverAddr 不能为空"));
+fn apply_proxy(t: &mut Table, p: &ProxyForm) {
+    set_value(t, "name", Value::from(p.name.trim()));
+    set_value(t, "type", Value::from(p.kind.as_str()));
+    if t.contains_key("localIp") {
+        t.remove("localIp");
+    }
+    set_opt_str(t, "localIP", &p.local_ip);
+    set_opt_int(t, "localPort", p.local_port);
+    set_opt_int(t, "remotePort", p.remote_port);
+    set_str_arr(t, "customDomains", &p.custom_domains);
+    set_opt_str(t, "subdomain", &p.subdomain);
+    set_str_arr(t, "locations", &p.locations);
+    set_opt_str(t, "httpUser", &p.http_user);
+    set_opt_str(t, "httpPassword", &p.http_password);
+    set_opt_str(t, "hostHeaderRewrite", &p.host_header_rewrite);
+    set_opt_str(t, "multiplexer", &p.multiplexer);
+    if t.contains_key("routeByHttpUser") {
+        t.remove("routeByHttpUser");
+    }
+    set_opt_str(t, "routeByHTTPUser", &p.route_by_http_user);
+    set_opt_str(t, "secretKey", &p.secret_key);
+    set_str_arr(t, "allowUsers", &p.allow_users);
+
+    {
+        let tr = sub_table(t, "transport", true);
+        set_opt_bool(tr, "useEncryption", p.use_encryption);
+        set_opt_bool(tr, "useCompression", p.use_compression);
+        set_opt_str(tr, "bandwidthLimit", &p.bandwidth_limit);
+        set_opt_str(tr, "bandwidthLimitMode", &p.bandwidth_limit_mode);
+    }
+    drop_if_empty(t, "transport");
+
+    apply_plugin(t, &p.plugin);
+    // Keep the plugin section last so it reads like hand-written configs.
+    if let Some(item) = t.remove("plugin") {
+        t.insert("plugin", item);
+    }
+}
+
+/// Apply the form onto the previous document text and return the new text.
+pub fn apply_form(original: &str, form: &FrpcForm) -> AppResult<String> {
+    let mut doc: DocumentMut = if original.trim().is_empty() {
+        DocumentMut::new()
+    } else {
+        original.parse()?
+    };
+
+    {
+        let root = doc.as_table_mut();
+        set_value(root, "serverAddr", Value::from(form.server_addr.trim()));
+        set_value(root, "serverPort", Value::from(form.server_port as i64));
+        set_opt_str(root, "user", &form.user);
+    }
+    match form.auth.token.as_deref().filter(|s| !s.is_empty()) {
+        Some(tk) => {
+            let root = doc.as_table_mut();
+            let auth = sub_table(root, "auth", false);
+            set_value(auth, "token", Value::from(tk));
+        }
+        None => {
+            if let Some(Item::Table(auth)) = doc.as_table_mut().get_mut("auth") {
+                auth.remove("token");
+            }
+            drop_if_empty(doc.as_table_mut(), "auth");
+        }
+    }
+
+    let old: Vec<Table> = match doc.as_table_mut().remove("proxies") {
+        Some(Item::ArrayOfTables(a)) => a.into_iter().collect(),
+        Some(Item::Value(Value::Array(a))) => a
+            .into_iter()
+            .filter_map(|v| match v {
+                Value::InlineTable(it) => Some(it.into_table()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    let mut arr = ArrayOfTables::new();
+    for p in &form.proxies {
+        let mut t = p
+            .origin
+            .and_then(|i| old.get(i).cloned())
+            .unwrap_or_default();
+        apply_proxy(&mut t, p);
+        arr.push(t);
+    }
+    if !arr.is_empty() {
+        doc.as_table_mut()
+            .insert("proxies", Item::ArrayOfTables(arr));
+    }
+
+    let mut text = doc.to_string();
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    Ok(text)
+}
+
+/// Render the form into a fresh document (no previous text available).
+#[cfg(test)]
+pub fn form_to_toml(form: &FrpcForm) -> AppResult<String> {
+    apply_form("", form)
+}
+
+// ---------------------------------------------------------------- validate
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Issue {
+    /// error | warning
+    pub level: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidationReport {
+    pub ok: bool,
+    pub issues: Vec<Issue>,
+}
+
+impl ValidationReport {
+    fn err(&mut self, proxy: Option<&str>, m: impl Into<String>) {
+        self.issues.push(Issue {
+            level: "error",
+            proxy: proxy.map(String::from),
+            message: m.into(),
+        });
+    }
+    fn warn(&mut self, proxy: Option<&str>, m: impl Into<String>) {
+        self.issues.push(Issue {
+            level: "warning",
+            proxy: proxy.map(String::from),
+            message: m.into(),
+        });
+    }
+    pub fn first_error(&self) -> Option<&Issue> {
+        self.issues.iter().find(|i| i.level == "error")
+    }
+}
+
+fn is_host_port(s: &str) -> bool {
+    match s.rsplit_once(':') {
+        Some((h, p)) => !h.is_empty() && p.parse::<u16>().map(|n| n > 0).unwrap_or(false),
+        None => false,
+    }
+}
+
+/// Static checks on the form. File-level certificate checks live in
+/// `certs::check_form` because they need the frpc working directory.
+pub fn validate_form(form: &FrpcForm) -> ValidationReport {
+    let mut r = ValidationReport::default();
+    if form.server_addr.trim().is_empty() {
+        r.err(None, "服务器地址 (serverAddr) 不能为空");
     }
     if form.server_port == 0 {
-        return Err(AppError::msg("serverPort 无效"));
+        r.err(None, "服务器端口 (serverPort) 无效");
     }
-    let mut seen = std::collections::HashSet::new();
+    if form.auth.token.as_deref().unwrap_or("").is_empty() {
+        r.warn(None, "未设置 auth.token，frps 开启鉴权时将无法连接");
+    }
+
+    let mut names = HashSet::new();
+    let mut domains: BTreeMap<String, String> = BTreeMap::new();
     for p in &form.proxies {
-        if p.name.is_empty() {
-            return Err(AppError::msg("proxy name 不能为空"));
+        let name = p.name.trim();
+        let pn = Some(name);
+        if name.is_empty() {
+            r.err(None, "存在未命名的代理");
+            continue;
         }
-        if !seen.insert(p.name.clone()) {
-            return Err(AppError::msg(format!("proxy 名称重复: {}", p.name)));
+        if !names.insert(name.to_string()) {
+            r.err(pn, format!("代理名称重复: {name}"));
+        }
+        let kind = p.kind.as_str();
+        if !PROXY_TYPES.contains(&kind) {
+            r.err(pn, format!("未知代理类型: {kind}"));
+            continue;
+        }
+        let plugin = p
+            .plugin
+            .as_ref()
+            .filter(|pl| !pl.kind.is_empty() && pl.kind != "none");
+
+        if matches!(kind, "http" | "https" | "tcpmux") {
+            let has_sub = p
+                .subdomain
+                .as_deref()
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            if p.custom_domains.is_empty() && !has_sub {
+                r.err(
+                    pn,
+                    "需要至少一个自定义域名 (customDomains) 或子域名 (subdomain)",
+                );
+            }
+            for d in &p.custom_domains {
+                let d = d.trim().to_ascii_lowercase();
+                if d.contains("://") || d.contains('/') || d.contains(':') {
+                    r.err(pn, format!("域名只填主机名，不要带协议、端口或路径: {d}"));
+                }
+                if let Some(other) = domains.insert(format!("{kind}:{d}"), name.to_string()) {
+                    r.err(pn, format!("域名 {d} 已被代理 {other} 使用"));
+                }
+            }
+        }
+        if matches!(kind, "tcp" | "udp") && p.remote_port.is_none() && plugin.is_none() {
+            r.warn(pn, "未设置远程端口 (remotePort)，将由 frps 随机分配");
+        }
+        if matches!(kind, "stcp" | "sudp" | "xtcp")
+            && p.secret_key.as_deref().unwrap_or("").is_empty()
+        {
+            r.warn(pn, "未设置 secretKey，访问端需使用相同密钥");
+        }
+        if plugin.is_none() && p.local_port.is_none() {
+            r.err(pn, "需要本地端口 (localPort) 或插件");
+        }
+
+        if let Some(pl) = plugin {
+            if !PLUGIN_TYPES.contains(&pl.kind.as_str()) {
+                r.warn(pn, format!("未知插件类型: {}", pl.kind));
+            }
+            if matches!(
+                pl.kind.as_str(),
+                "https2http" | "https2https" | "http2https"
+            ) {
+                if kind != "https" && pl.kind.starts_with("https2") {
+                    r.warn(pn, format!("{} 插件通常配合 https 类型代理使用", pl.kind));
+                }
+                match pl.local_addr.as_deref().map(str::trim) {
+                    None | Some("") => {
+                        r.err(pn, "插件需要本地地址 (localAddr)，例如 127.0.0.1:8080")
+                    }
+                    Some(a) if !is_host_port(a) => {
+                        r.err(pn, format!("本地地址格式应为 host:port，当前为 {a}"))
+                    }
+                    _ => {}
+                }
+            }
+            if matches!(pl.kind.as_str(), "https2http" | "https2https") {
+                let crt = pl.crt_path.as_deref().unwrap_or("").trim();
+                let key = pl.key_path.as_deref().unwrap_or("").trim();
+                match (crt.is_empty(), key.is_empty()) {
+                    (true, true) => {
+                        r.warn(pn, "未配置证书，frpc 会使用自签名证书，浏览器将提示不安全")
+                    }
+                    (false, true) | (true, false) => {
+                        r.err(pn, "证书 (crtPath) 和私钥 (keyPath) 需要同时填写")
+                    }
+                    _ => {}
+                }
+            }
+            if pl.kind == "static_file" && pl.local_path.as_deref().unwrap_or("").is_empty() {
+                r.err(pn, "static_file 插件需要本地目录 (localPath)");
+            }
+            if pl.kind == "unix_domain_socket" && pl.unix_path.as_deref().unwrap_or("").is_empty() {
+                r.err(pn, "unix_domain_socket 插件需要 unixPath");
+            }
         }
     }
-    Ok(())
+    r.ok = r.first_error().is_none();
+    r
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 验证全 8 种代理类型与部分插件可被解析并 round-trip 后保留关键字段。
-    #[test]
-    fn round_trip_all_proxy_types() {
-        let src = r#"
-serverAddr = "f.example.com"
-serverPort = 7000
-[auth]
-token = "abc"
-
-[[proxies]]
-name = "https-vh"
-type = "https"
-customDomains = ["a.example.com"]
-[proxies.plugin]
-type = "https2http"
-localAddr = "127.0.0.1:8080"
-crtPath = "./certs/a.crt"
-keyPath = "./certs/a.key"
-hostHeaderRewrite = "127.0.0.1"
-requestHeaders.set.x-from-where = "frp"
-
-[[proxies]]
-name = "ssh"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 22
-remotePort = 6000
-transport.useEncryption = true
-transport.useCompression = true
-transport.bandwidthLimit = "1MB"
-transport.bandwidthLimitMode = "client"
-
-[[proxies]]
-name = "udp-dns"
-type = "udp"
-localIP = "127.0.0.1"
-localPort = 53
-remotePort = 6053
-
-[[proxies]]
-name = "http-vh"
-type = "http"
-customDomains = ["web.example.com"]
-locations = ["/", "/api"]
-httpUser = "u"
-httpPassword = "p"
-hostHeaderRewrite = "127.0.0.1"
-localIP = "127.0.0.1"
-localPort = 8080
-
-[[proxies]]
-name = "muxed"
-type = "tcpmux"
-multiplexer = "httpconnect"
-customDomains = ["m.example.com"]
-routeByHTTPUser = "alice"
-localIP = "127.0.0.1"
-localPort = 8000
-
-[[proxies]]
-name = "secret-ssh"
-type = "stcp"
-secretKey = "key1"
-allowUsers = ["u1", "u2"]
-localIP = "127.0.0.1"
-localPort = 22
-
-[[proxies]]
-name = "secret-udp"
-type = "sudp"
-secretKey = "key2"
-localIP = "127.0.0.1"
-localPort = 53
-
-[[proxies]]
-name = "p2p"
-type = "xtcp"
-secretKey = "key3"
-localIP = "127.0.0.1"
-localPort = 22
-
-[[proxies]]
-name = "static"
-type = "tcp"
-remotePort = 6080
-[proxies.plugin]
-type = "static_file"
-localPath = "/var/www"
-stripPrefix = "static"
-httpUser = "a"
-httpPassword = "b"
-
-[[proxies]]
-name = "socks"
-type = "tcp"
-remotePort = 6081
-[proxies.plugin]
-type = "socks5"
-username = "sk"
-password = "pw"
-
-[[proxies]]
-name = "unix"
-type = "tcp"
-remotePort = 6082
-[proxies.plugin]
-type = "unix_domain_socket"
-unixPath = "/var/run/docker.sock"
-"#;
-
-        let form = parse_to_form(src).expect("解析失败");
-        assert_eq!(form.server_addr, "f.example.com");
-        assert_eq!(form.server_port, 7000);
-        assert_eq!(form.proxies.len(), 11);
-
-        // 调查各个关键字段被正确读取
-        let by_name = |n: &str| form.proxies.iter().find(|p| p.name == n).unwrap();
-
-        let tcp = by_name("ssh");
-        assert_eq!(tcp.kind, "tcp");
-        assert_eq!(tcp.local_port, Some(22));
-        assert_eq!(tcp.remote_port, Some(6000));
-        assert_eq!(tcp.use_encryption, Some(true));
-        assert_eq!(tcp.use_compression, Some(true));
-        assert_eq!(tcp.bandwidth_limit.as_deref(), Some("1MB"));
-
-        let http = by_name("http-vh");
-        assert_eq!(http.locations, vec!["/".to_string(), "/api".to_string()]);
-        assert_eq!(http.http_user.as_deref(), Some("u"));
-        assert_eq!(http.host_header_rewrite.as_deref(), Some("127.0.0.1"));
-
-        let mux = by_name("muxed");
-        assert_eq!(mux.multiplexer.as_deref(), Some("httpconnect"));
-        assert_eq!(mux.route_by_http_user.as_deref(), Some("alice"));
-
-        let stcp = by_name("secret-ssh");
-        assert_eq!(stcp.secret_key.as_deref(), Some("key1"));
-        assert_eq!(stcp.allow_users, vec!["u1".to_string(), "u2".to_string()]);
-
-        let sf = by_name("static").plugin.as_ref().unwrap();
-        assert_eq!(sf.kind, "static_file");
-        assert_eq!(sf.local_path.as_deref(), Some("/var/www"));
-        assert_eq!(sf.strip_prefix.as_deref(), Some("static"));
-        assert_eq!(sf.http_user.as_deref(), Some("a"));
-
-        let sock = by_name("socks").plugin.as_ref().unwrap();
-        assert_eq!(sock.kind, "socks5");
-        assert_eq!(sock.username.as_deref(), Some("sk"));
-
-        let uds = by_name("unix").plugin.as_ref().unwrap();
-        assert_eq!(uds.unix_path.as_deref(), Some("/var/run/docker.sock"));
-
-        // round-trip、重新解析后字段不变
-        let toml2 = form_to_toml(&form).expect("序列化失败");
-        let form2 = parse_to_form(&toml2).expect("二次解析失败");
-        assert_eq!(form2.proxies.len(), form.proxies.len());
-        for (a, b) in form.proxies.iter().zip(form2.proxies.iter()) {
-            assert_eq!(a.name, b.name);
-            assert_eq!(a.kind, b.kind);
-            assert_eq!(a.local_port, b.local_port);
-            assert_eq!(a.remote_port, b.remote_port);
-            assert_eq!(a.custom_domains, b.custom_domains);
-            assert_eq!(a.locations, b.locations);
-            assert_eq!(a.secret_key, b.secret_key);
-            assert_eq!(a.allow_users, b.allow_users);
-            assert_eq!(a.multiplexer, b.multiplexer);
-            assert_eq!(a.use_encryption, b.use_encryption);
-            assert_eq!(a.bandwidth_limit, b.bandwidth_limit);
-            assert_eq!(a.plugin.as_ref().map(|p| p.kind.clone()), b.plugin.as_ref().map(|p| p.kind.clone()));
-        }
-    }
-
-    /// 验证现有项目根目录 frpc.toml 仍可被解析。
-    #[test]
-    fn legacy_https_unchanged() {
-        let src = r#"
-serverAddr = "f.ueware.com"
-serverPort = 9780
-auth.token = "luckyAa!1"
-
-[[proxies]]
-name = "funasr.ueware.com"
-type = "https"
-customDomains = ["funasr.ueware.com"]
-[proxies.plugin]
-type = "https2http"
-localAddr = "127.0.0.1:5273"
-crtPath = "./ueware.crt"
-keyPath = "./ueware.key"
-hostHeaderRewrite = "127.0.0.1"
-requestHeaders.set.x-from-where = "frp"
-"#;
-        let form = parse_to_form(src).expect("解析失败");
-        assert_eq!(form.proxies.len(), 1);
-        let p = &form.proxies[0];
-        assert_eq!(p.kind, "https");
-        assert_eq!(p.custom_domains, vec!["funasr.ueware.com".to_string()]);
-        let pl = p.plugin.as_ref().unwrap();
-        assert_eq!(pl.kind, "https2http");
-        assert_eq!(pl.local_addr.as_deref(), Some("127.0.0.1:5273"));
-        assert_eq!(pl.crt_path.as_deref(), Some("./ueware.crt"));
-        assert_eq!(
-            pl.request_headers_set.get("x-from-where").map(String::as_str),
-            Some("frp")
-        );
-    }
-}
+mod tests;
