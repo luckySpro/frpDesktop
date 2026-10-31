@@ -21,6 +21,7 @@ pub struct DaemonStatus {
     pub binary: Option<String>,
 }
 
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 pub struct DaemonSpec<'a> {
     pub bin: &'a Path,
     pub profile: &'a Path,
