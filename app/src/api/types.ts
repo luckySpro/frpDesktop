@@ -6,6 +6,7 @@ export interface AppPaths {
   currentLink: string;
   profilesDir: string;
   defaultProfile: string;
+  runtimeProfile: string;
   certsDir: string;
   logsDir: string;
   logFile: string;
@@ -51,6 +52,8 @@ export interface PluginForm {
 export interface ProxyForm {
   /** index in the parsed document; undefined for new proxies */
   origin?: number | null;
+  /** false = switched off: kept in the profile, not run by frpc */
+  enabled: boolean;
   name: string;
   type: string;
   localIp?: string | null;

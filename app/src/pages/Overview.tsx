@@ -41,8 +41,10 @@ export default function Overview({ onNavigate }: { onNavigate: (t: Tab) => void 
   const certByPath = useMemo(() => new Map(certs.map((c) => [c.configPath, c])), [certs]);
   const proxies = form?.proxies ?? [];
   const running = isActive(status) || !!daemon?.loaded;
-  const okCount = proxies.filter((p) => digest.proxies[p.name]?.state === "ok").length;
-  const errCount = proxies.filter((p) => digest.proxies[p.name]?.state === "error").length;
+  const enabled = proxies.filter((p) => p.enabled !== false);
+  const offCount = proxies.length - enabled.length;
+  const okCount = enabled.filter((p) => digest.proxies[p.name]?.state === "ok").length;
+  const errCount = enabled.filter((p) => digest.proxies[p.name]?.state === "error").length;
   const st = statusText(status);
 
   const open = (url: string) => api.openUrl(url).catch((e) => message.error(errText(e)));
@@ -72,10 +74,11 @@ export default function Overview({ onNavigate }: { onNavigate: (t: Tab) => void 
         <div className="panel stat">
           <div className="stat-label">代理</div>
           <div className="stat-value">
-            {proxies.length} 个
+            {enabled.length} 个
           </div>
           <div className="stat-sub">
             {running ? `${okCount} 个正常${errCount ? ` · ${errCount} 个失败` : ""}` : "frpc 未运行"}
+            {offCount > 0 && ` · ${offCount} 个已关闭`}
           </div>
         </div>
         <div className="panel stat">
@@ -106,14 +109,15 @@ export default function Overview({ onNavigate }: { onNavigate: (t: Tab) => void 
         ) : (
           <div className="site-list">
             {proxies.map((p) => {
-              const h = digest.proxies[p.name];
+              const on = p.enabled !== false;
+              const h = on ? digest.proxies[p.name] : undefined;
               const urls = accessUrls(p, settings, form?.serverAddr ?? "");
               const cert = p.plugin?.crtPath ? certByPath.get(p.plugin.crtPath) : undefined;
               const days = cert?.cert?.daysLeft;
-              const dot = !running ? "" : h?.state === "ok" ? "ok" : h?.state === "error" ? "err" : "busy";
+              const dot = !running || !on ? "" : h?.state === "ok" ? "ok" : h?.state === "error" ? "err" : "busy";
               return (
-                <div className="site-row" key={p.name}>
-                  <Tooltip title={!running ? "frpc 未运行" : h?.state === "error" ? h.message : h?.state === "ok" ? "运行正常" : "等待 frpc 报告"}>
+                <div className={`site-row${on ? "" : " off"}`} key={p.name}>
+                  <Tooltip title={!on ? "已关闭" : !running ? "frpc 未运行" : h?.state === "error" ? h.message : h?.state === "ok" ? "运行正常" : "等待 frpc 报告"}>
                     <span className={`dot ${dot}`} />
                   </Tooltip>
                   <div className="site-main">
@@ -140,7 +144,9 @@ export default function Overview({ onNavigate }: { onNavigate: (t: Tab) => void 
                   </div>
                   <div className="site-local site-sub mono">→ {localTarget(p)}</div>
                   <div>
-                    {days !== undefined &&
+                    {!on ? (
+                      <Tag bordered={false}>已关闭</Tag>
+                    ) : days !== undefined &&
                       (days < 0 ? (
                         <Tag color="error">证书已过期</Tag>
                       ) : days <= 15 ? (
