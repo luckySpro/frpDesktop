@@ -69,13 +69,21 @@ pub struct PluginForm {
     pub password: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyForm {
     /// Index of this proxy in the document it was parsed from. New proxies have
     /// `None`. Used by `apply_form` to keep untouched fields and comments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<usize>,
+    /// `enabled = false` in TOML. Disabled proxies stay in the profile but
+    /// are left out of the config frpc actually runs (see `runtime_text`).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     pub name: String,
     /// tcp | udp | http | https | tcpmux | stcp | sudp | xtcp
     #[serde(rename = "type")]
@@ -116,6 +124,35 @@ pub struct ProxyForm {
     pub bandwidth_limit_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<PluginForm>,
+}
+
+impl Default for ProxyForm {
+    fn default() -> Self {
+        ProxyForm {
+            origin: None,
+            enabled: true,
+            name: String::new(),
+            kind: String::new(),
+            local_ip: None,
+            local_port: None,
+            remote_port: None,
+            custom_domains: Vec::new(),
+            subdomain: None,
+            locations: Vec::new(),
+            http_user: None,
+            http_password: None,
+            host_header_rewrite: None,
+            multiplexer: None,
+            route_by_http_user: None,
+            secret_key: None,
+            allow_users: Vec::new(),
+            use_encryption: None,
+            use_compression: None,
+            bandwidth_limit: None,
+            bandwidth_limit_mode: None,
+            plugin: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -238,6 +275,7 @@ fn proxy_from_table(tbl: &toml::value::Table) -> ProxyForm {
 
     ProxyForm {
         origin: None,
+        enabled: tbl.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
         name: get_str("name").unwrap_or_default(),
         kind: get_str("type").unwrap_or_else(|| "tcp".into()),
         local_ip: get_str("localIP").or_else(|| get_str("localIp")),
@@ -417,6 +455,11 @@ fn apply_plugin(t: &mut Table, pl: &Option<PluginForm>) {
 fn apply_proxy(t: &mut Table, p: &ProxyForm) {
     set_value(t, "name", Value::from(p.name.trim()));
     set_value(t, "type", Value::from(p.kind.as_str()));
+    if p.enabled {
+        t.remove("enabled");
+    } else {
+        set_value(t, "enabled", Value::from(false));
+    }
     if t.contains_key("localIp") {
         t.remove("localIp");
     }
@@ -514,6 +557,48 @@ pub fn apply_form(original: &str, form: &FrpcForm) -> AppResult<String> {
     Ok(text)
 }
 
+fn proxy_tables_mut(doc: &mut DocumentMut) -> Vec<&mut Table> {
+    match doc.as_table_mut().get_mut("proxies") {
+        Some(Item::ArrayOfTables(a)) => a.iter_mut().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The config frpc is actually started with: proxies marked
+/// `enabled = false` are removed, and the `enabled` key is stripped from the
+/// rest so frpc versions older than v0.66 (which reject unknown keys) still
+/// accept it. Everything else is kept byte-for-byte.
+pub fn runtime_text(text: &str) -> AppResult<String> {
+    let mut doc: DocumentMut = text.parse()?;
+    // Inline-array style `proxies = [{...}]` is normalised to [[proxies]].
+    if let Some(Item::Value(Value::Array(_))) = doc.as_table().get("proxies") {
+        if let Some(Item::Value(Value::Array(a))) = doc.as_table_mut().remove("proxies") {
+            let mut arr = ArrayOfTables::new();
+            for v in a {
+                if let Value::InlineTable(it) = v {
+                    arr.push(it.into_table());
+                }
+            }
+            doc.as_table_mut()
+                .insert("proxies", Item::ArrayOfTables(arr));
+        }
+    }
+    if let Some(Item::ArrayOfTables(arr)) = doc.as_table_mut().get_mut("proxies") {
+        arr.retain(|t| t.get("enabled").and_then(|i| i.as_bool()) != Some(false));
+        if arr.is_empty() {
+            doc.as_table_mut().remove("proxies");
+        }
+    }
+    for t in proxy_tables_mut(&mut doc) {
+        t.remove("enabled");
+    }
+    let mut out = doc.to_string();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
+}
+
 /// Render the form into a fresh document (no previous text available).
 #[cfg(test)]
 pub fn form_to_toml(form: &FrpcForm) -> AppResult<String> {
@@ -591,6 +676,10 @@ pub fn validate_form(form: &FrpcForm) -> ValidationReport {
         }
         if !names.insert(name.to_string()) {
             r.err(pn, format!("代理名称重复: {name}"));
+        }
+        // A switched-off proxy is not run, so its fields can't break frpc.
+        if !p.enabled {
+            continue;
         }
         let kind = p.kind.as_str();
         if !PROXY_TYPES.contains(&kind) {
@@ -677,6 +766,12 @@ pub fn validate_form(form: &FrpcForm) -> ValidationReport {
                 r.err(pn, "unix_domain_socket 插件需要 unixPath");
             }
         }
+    }
+    if !form.proxies.is_empty() && form.proxies.iter().all(|p| !p.enabled) {
+        r.warn(
+            None,
+            "所有代理都已关闭，frpc 只会连接服务器，不提供任何代理",
+        );
     }
     r.ok = r.first_error().is_none();
     r

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { App, Button, Dropdown, Empty, Input, InputNumber, Segmented, Space, Spin, Tag, Tooltip, Form } from "antd";
+import { App, Button, Dropdown, Empty, Input, InputNumber, Segmented, Space, Spin, Switch, Tag, Tooltip, Form } from "antd";
 import {
   CheckCircleOutlined,
   CodeOutlined,
@@ -22,12 +22,25 @@ import Issues from "../components/Issues";
 
 type Editing = { index: number | null; proxy: ProxyForm } | null;
 
-function ProxyCard({ p, issues, onClick }: { p: ProxyForm; issues: number; onClick: () => void }) {
+function ProxyCard({
+  p,
+  issues,
+  onClick,
+  onToggle,
+  toggling,
+}: {
+  p: ProxyForm;
+  issues: number;
+  onClick: () => void;
+  onToggle: (enabled: boolean) => void;
+  toggling: boolean;
+}) {
+  const on = p.enabled !== false;
   const certs = useApp((s) => s.certs);
   const cert = p.plugin?.crtPath ? certs.find((c) => c.configPath === p.plugin!.crtPath) : undefined;
   return (
     <div
-      className="panel proxy-card"
+      className={`panel proxy-card${on ? "" : " off"}`}
       role="button"
       tabIndex={0}
       onClick={onClick}
@@ -40,7 +53,13 @@ function ProxyCard({ p, issues, onClick }: { p: ProxyForm; issues: number; onCli
         <span className="name" title={p.name}>
           {p.name || "(未命名)"}
         </span>
-        {issues > 0 && <Tag color="error">{issues} 个问题</Tag>}
+        {!on && <Tag bordered={false}>已关闭</Tag>}
+        {on && issues > 0 && <Tag color="error">{issues} 个问题</Tag>}
+        <Tooltip title={on ? "关闭这个代理（保留配置）" : "启用这个代理"}>
+          <span onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+            <Switch size="small" checked={on} loading={toggling} onChange={onToggle} aria-label={`${on ? "关闭" : "启用"}代理 ${p.name}`} />
+          </span>
+        </Tooltip>
       </div>
       <dl className="kv">
         {p.customDomains.length > 0 && (
@@ -100,6 +119,8 @@ export default function Proxies() {
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [saving, setSaving] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  const [toggling, setToggling] = useState<number | null>(null);
+  const daemonLoaded = useApp((s) => !!s.daemon?.loaded);
   const dark = document.documentElement.dataset.theme === "dark";
 
   // Re-validate shortly after every edit.
@@ -146,6 +167,45 @@ export default function Proxies() {
       message.error(errText(e));
     } finally {
       setSaving(false);
+    }
+  };
+
+  /**
+   * Switch one proxy on/off. With no other unsaved edits this applies right
+   * away (save, then restart frpc if it is running); otherwise it is just
+   * another pending edit that goes out with the next save.
+   */
+  const toggleProxy = async (index: number, enabled: boolean) => {
+    const p = form?.proxies[index];
+    if (!p) return;
+    const wasDirty = cfg.dirty;
+    cfg.setProxyEnabled(index, enabled);
+    const verb = enabled ? "启用" : "关闭";
+    if (wasDirty) {
+      message.info(`已${verb} ${p.name}，保存后生效`);
+      return;
+    }
+    setToggling(index);
+    try {
+      const r = await cfg.save(false);
+      if (!r.ok) {
+        message.warning(`已${verb} ${p.name}，但配置中有错误，修正后再保存`);
+        return;
+      }
+      if (running) {
+        await api.runnerRestart();
+        message.success(`已${verb} ${p.name}，frpc 已重启`);
+      } else if (daemonLoaded) {
+        await api.daemonRestart();
+        message.success(`已${verb} ${p.name}，后台服务已重启`);
+      } else {
+        message.success(`已${verb} ${p.name}`);
+      }
+      useApp.getState().refreshInfo();
+    } catch (e) {
+      message.error(errText(e));
+    } finally {
+      setToggling(null);
     }
   };
 
@@ -211,6 +271,7 @@ export default function Proxies() {
   const firstCert = certs.find((c) => c.kind === "cert" && c.pair && c.cert && c.cert.daysLeft >= 0);
   const addMenu = PROXY_TYPES.filter((t) => t.value !== "https").map((t) => ({ key: t.value, label: `${t.label} · ${t.desc}` }));
   const errors = cfg.report?.issues.filter((i) => i.level === "error").length ?? 0;
+  const enabledCount = form?.proxies.filter((p) => p.enabled !== false).length ?? 0;
 
   return (
     <>
@@ -315,7 +376,11 @@ export default function Proxies() {
           <section className="panel">
             <div className="panel-head">
               <h2>代理</h2>
-              <Tag>{form.proxies.length}</Tag>
+              <Tooltip title="已启用 / 全部">
+                <Tag>
+                  {enabledCount === form.proxies.length ? form.proxies.length : `${enabledCount} / ${form.proxies.length}`}
+                </Tag>
+              </Tooltip>
               <div className="spacer" />
               <Segmented
                 size="small"
@@ -340,7 +405,14 @@ export default function Proxies() {
               ) : (
                 <div className="proxy-grid">
                   {visible.map(({ p, i }) => (
-                    <ProxyCard key={i} p={p} issues={issuesByProxy.get(p.name) ?? 0} onClick={() => setEditing({ index: i, proxy: structuredClone(p) })} />
+                    <ProxyCard
+                      key={i}
+                      p={p}
+                      issues={issuesByProxy.get(p.name) ?? 0}
+                      toggling={toggling === i}
+                      onToggle={(v) => toggleProxy(i, v)}
+                      onClick={() => setEditing({ index: i, proxy: structuredClone(p) })}
+                    />
                   ))}
                 </div>
               )}

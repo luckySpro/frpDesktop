@@ -342,6 +342,14 @@ body,
   flex-direction: column;
   gap: 8px;
 }
+.proxy-card.off .head .name,
+.proxy-card.off .kv {
+  opacity: 0.5;
+}
+.site-row.off .site-main,
+.site-row.off .site-local {
+  opacity: 0.5;
+}
 .proxy-card:hover {
   border-color: var(--brand);
 }

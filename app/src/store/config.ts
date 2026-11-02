@@ -23,6 +23,7 @@ interface ConfigStore {
   setForm: (f: FrpcForm) => void;
   upsertProxy: (index: number | null, p: ProxyForm) => void;
   removeProxy: (index: number) => void;
+  setProxyEnabled: (index: number, enabled: boolean) => void;
   setSource: (text: string) => void;
   setMode: (m: Mode) => Promise<void>;
   /** Text that would be written right now. */
@@ -74,6 +75,13 @@ export const useConfig = create<ConfigStore>((set, get) => ({
     const form = get().form;
     if (!form) return;
     set({ form: { ...form, proxies: form.proxies.filter((_, i) => i !== index) }, dirty: true });
+  },
+
+  setProxyEnabled(index, enabled) {
+    const form = get().form;
+    if (!form || !form.proxies[index]) return;
+    const proxies = form.proxies.map((p, i) => (i === index ? { ...p, enabled } : p));
+    set({ form: { ...form, proxies }, dirty: true });
   },
 
   setSource(text) {

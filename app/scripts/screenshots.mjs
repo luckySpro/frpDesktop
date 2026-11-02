@@ -13,6 +13,7 @@ const shots = [
   { name: "overview-light", tab: "overview", theme: "light" },
   { name: "overview-dark", tab: "overview", theme: "dark" },
   { name: "proxies-light", tab: "proxies", theme: "light" },
+  { name: "proxies-dark", tab: "proxies", theme: "dark" },
   { name: "proxy-editor-light", tab: "proxies", theme: "light", click: ".proxy-card" },
   { name: "certs-dark", tab: "certs", theme: "dark" },
   { name: "settings-light", tab: "settings", theme: "light" },

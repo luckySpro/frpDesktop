@@ -31,6 +31,7 @@ const now = Math.floor(Date.now() / 1000);
 
 const https = (name: string, port: number, crt = "./certs/example.com.crt"): ProxyForm => ({
   origin: null,
+  enabled: true,
   name,
   type: "https",
   customDomains: [name],
@@ -53,10 +54,11 @@ let form: FrpcForm = {
   proxies: [
     https("app.example.com", 5173),
     https("api.example.com", 8080),
-    https("docs.example.com", 4000),
+    { ...https("docs.example.com", 4000), enabled: false },
     https("grafana.example.com", 3000, "./certs/grafana.example.com.crt"),
     {
       origin: null,
+      enabled: true,
       name: "ssh",
       type: "tcp",
       localIp: "127.0.0.1",
@@ -81,6 +83,7 @@ function render(f: FrpcForm): string {
   ];
   for (const p of f.proxies) {
     lines.push("[[proxies]]", `name = ${q(p.name)}`, `type = ${q(p.type)}`);
+    if (p.enabled === false) lines.push("enabled = false");
     if (p.localIp) lines.push(`localIP = ${q(p.localIp)}`);
     if (p.localPort) lines.push(`localPort = ${p.localPort}`);
     if (p.remotePort) lines.push(`remotePort = ${p.remotePort}`);
@@ -167,10 +170,9 @@ const logs: string[] = [
   `[stdout] ${ts(197)} [I] [sub/root.go:142] start frpc service for config file [profiles/default.toml]`,
   `[stdout] ${ts(197)} [I] [client/service.go:295] try to connect to server...`,
   `[stdout] ${ts(197)} [I] [client/service.go:287] [8c2f1a3b9d0e4f21] login to server success, get run id [8c2f1a3b9d0e4f21]`,
-  `[stdout] ${ts(197)} [I] [proxy/proxy_manager.go:173] [8c2f1a3b9d0e4f21] proxy added: [app.example.com api.example.com docs.example.com grafana.example.com ssh]`,
+  `[stdout] ${ts(197)} [I] [proxy/proxy_manager.go:173] [8c2f1a3b9d0e4f21] proxy added: [app.example.com api.example.com grafana.example.com ssh]`,
   `[stdout] ${ts(197)} [I] [client/control.go:168] [8c2f1a3b9d0e4f21] [app.example.com] start proxy success`,
   `[stdout] ${ts(197)} [I] [client/control.go:168] [8c2f1a3b9d0e4f21] [api.example.com] start proxy success`,
-  `[stdout] ${ts(197)} [I] [client/control.go:168] [8c2f1a3b9d0e4f21] [docs.example.com] start proxy success`,
   `[stdout] ${ts(197)} [I] [client/control.go:168] [8c2f1a3b9d0e4f21] [grafana.example.com] start proxy success`,
   `[stdout] ${ts(197)} [W] [client/control.go:166] [8c2f1a3b9d0e4f21] [ssh] start error: port already used`,
 ];
@@ -183,6 +185,7 @@ function validate(f: FrpcForm): ValidationReport {
     if (!p.name) issues.push({ level: "error", message: "存在未命名的代理" });
     else if (names.has(p.name)) issues.push({ level: "error", proxy: p.name, message: `代理名称重复: ${p.name}` });
     names.add(p.name);
+    if (p.enabled === false) continue;
     if (p.plugin?.crtPath?.includes("grafana"))
       issues.push({ level: "warning", proxy: p.name, message: `证书 ${p.plugin.crtPath} 将在 9 天后过期` });
   }
@@ -206,6 +209,7 @@ const info = (): AppInfo => ({
     binDir: "~/Library/Application Support/com.ueware.frpdesktop/bin",
     currentLink: "",
     profilesDir: "~/Library/Application Support/com.ueware.frpdesktop/profiles",
+    runtimeProfile: "~/Library/Application Support/com.ueware.frpdesktop/profiles/runtime.toml",
     defaultProfile: "~/Library/Application Support/com.ueware.frpdesktop/profiles/default.toml",
     certsDir: "~/Library/Application Support/com.ueware.frpdesktop/certs",
     logsDir: "~/Library/Application Support/com.ueware.frpdesktop/logs",

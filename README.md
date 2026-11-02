@@ -12,10 +12,12 @@
 | 概览：站点状态、证书剩余天数、实时日志 | 深色模式 |
 | --- | --- |
 | ![概览](docs/screenshots/overview-light.png) | ![概览深色](docs/screenshots/overview-dark.png) |
-| **代理配置**：表单 / 源码双视图，保存前自动检查 | **HTTPS 站点编辑**：从证书库选择证书，私钥自动配对 |
+| **代理配置**：表单 / 源码双视图，保存前自动检查，每个代理可单独开关 | **HTTPS 站点编辑**：从证书库选择证书，私钥自动配对 |
 | ![代理配置](docs/screenshots/proxies-light.png) | ![编辑](docs/screenshots/proxy-editor-light.png) |
 | **证书库**：到期提醒、证书与私钥配对、使用情况 | **设置**：frpc 版本、镜像、自动重启、后台服务 |
 | ![证书库](docs/screenshots/certs-dark.png) | ![设置](docs/screenshots/settings-light.png) |
+| **代理配置（深色）**：关闭的代理变灰并标注「已关闭」 | |
+| ![代理配置深色](docs/screenshots/proxies-dark.png) | |
 | **窄窗口** | |
 | ![窄屏](docs/screenshots/overview-mobile-dark.png) | ![窄屏代理](docs/screenshots/proxies-mobile-light.png) |
 
@@ -30,6 +32,12 @@
 - 保存前检查：证书文件是否存在、是否过期 / 15 天内过期、是否覆盖域名、证书与私钥是否匹配、localAddr 格式、域名重复等
 - 一键 **frpc verify**：用 frpc 自己的校验命令检查配置
 - 概览页按日志显示每个代理是否启动成功，域名可点击直接在浏览器打开
+
+### 单个代理开关
+- 代理卡片右上角的开关可以单独关闭 / 启用某个代理，编辑抽屉里也有同样的开关；关闭的代理保留全部配置，随时可以再打开
+- 没有其他未保存修改时，切换开关会立即保存，frpc 正在运行（或后台服务已加载）时自动重启使其生效；有未保存修改时只记为一次修改，随下一次保存生效
+- 配置文件里记为 `enabled = false`（与 frp v0.66+ 的写法一致）。frpDesktop 实际运行的是自动生成的 `profiles/runtime.toml`，其中去掉了已关闭的代理和 `enabled` 字段，所以旧版本 frpc 也能用
+- 已关闭的代理只检查名称是否重复，不会因为其他字段不完整而阻止保存
 
 ### 配置不丢失
 - 表单保存时在原 TOML 上就地修改：**注释、键顺序、点号写法以及表单不认识的字段**（`log`、`webServer`、`transport`、`healthCheck`、`metadatas`…）都会原样保留
@@ -72,12 +80,14 @@ auth.token = "your-strong-token"
 - 数据目录、配置文件和证书目录不变，原有的 `bin/current` frpc 仍然可用
 - 旧版的 launchd 开机自启仍会被识别，可在「设置 → 后台服务」中管理
 - 0.1.x 用表单保存过的配置可能已经丢失了注释和部分字段，建议检查一次
+- 如果之前启用过后台服务，升级后在「设置 → 后台服务」点一次重启，让它改为运行 `runtime.toml`，单个代理开关才会对后台服务生效
 
 ## 数据位置
 
 | 内容 | 路径（应用数据目录下） |
 | --- | --- |
 | frpc 配置 | `profiles/default.toml` |
+| 实际运行的配置 | `profiles/runtime.toml`（由 default.toml 生成，去掉已关闭的代理，不要手动修改） |
 | 证书库 | `certs/`（配置里写 `./certs/文件名`） |
 | frpc 程序 | `bin/frpc-v<版本>` |
 | 日志 | `logs/frpc.log`（超过 5 MB 自动轮转） |

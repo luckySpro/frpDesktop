@@ -274,6 +274,15 @@ export default function ProxyEditor({
               删除
             </Button>
           )}
+          <Tooltip title="关闭后保留配置，但 frpc 不会启动这个代理">
+            <Switch
+              checked={p.enabled !== false}
+              checkedChildren="启用"
+              unCheckedChildren="关闭"
+              onChange={(v) => set({ enabled: v })}
+              aria-label="启用此代理"
+            />
+          </Tooltip>
           <Button type="primary" onClick={submit} disabled={!!nameError}>
             {isNew ? "添加" : "完成"}
           </Button>

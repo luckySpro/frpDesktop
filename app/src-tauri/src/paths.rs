@@ -3,7 +3,9 @@
 //! Layout (inside the OS app-data dir):
 //!   bin/frpc-v<version>[.exe]   managed frpc binaries
 //!   bin/current                 legacy symlink from v0.1.x (still honoured)
-//!   profiles/default.toml       the frpc config
+//!   profiles/default.toml       the frpc config (edited by the UI)
+//!   profiles/runtime.toml       generated from default.toml without the
+//!                               disabled proxies; this is what frpc runs
 //!   certs/                      certificate library (`./certs/…` in config)
 //!   logs/frpc.log               frpc output
 //!   settings.json               frpDesktop preferences
@@ -27,6 +29,7 @@ pub struct AppPaths {
     pub current_link: PathBuf,
     pub profiles_dir: PathBuf,
     pub default_profile: PathBuf,
+    pub runtime_profile: PathBuf,
     pub certs_dir: PathBuf,
     pub logs_dir: PathBuf,
     pub log_file: PathBuf,
@@ -42,6 +45,7 @@ impl AppPaths {
         AppPaths {
             current_link: bin_dir.join("current"),
             default_profile: profiles_dir.join("default.toml"),
+            runtime_profile: profiles_dir.join("runtime.toml"),
             log_file: logs_dir.join("frpc.log"),
             settings_file: data_dir.join("settings.json"),
             data_dir,

@@ -264,3 +264,92 @@ fn validation_flags_duplicate_domain_and_name() {
     assert!(r.issues.iter().any(|i| i.message.contains("已被代理")));
     assert!(r.issues.iter().any(|i| i.message.contains("名称重复")));
 }
+
+#[test]
+fn enabled_flag_round_trips_and_keeps_comments() {
+    let mut form = parse_to_form(HTTPS_SAMPLE).unwrap();
+    assert!(form.proxies.iter().all(|p| p.enabled));
+    form.proxies[0].enabled = false;
+    let off = apply_form(HTTPS_SAMPLE, &form).unwrap();
+    assert!(off.contains("enabled = false"), "{off}");
+    assert!(off.contains("# 名称,随意填"));
+    let again = parse_to_form(&off).unwrap();
+    assert!(!again.proxies[0].enabled);
+    assert!(again.proxies[1].enabled);
+
+    // Switching it back on removes the key instead of writing `enabled = true`.
+    let mut form = again;
+    form.proxies[0].enabled = true;
+    let on = apply_form(&off, &form).unwrap();
+    assert!(!on.contains("enabled"), "{on}");
+}
+
+#[test]
+fn runtime_text_drops_disabled_proxies() {
+    let src = HTTPS_SAMPLE.replacen(
+        "type = \"https\"\ncustomDomains = [\"a.example.com\"]",
+        "type = \"https\"\nenabled = false\ncustomDomains = [\"a.example.com\"]",
+        1,
+    );
+    let run = runtime_text(&src).unwrap();
+    let form = parse_to_form(&run).unwrap();
+    assert_eq!(form.proxies.len(), 1);
+    assert_eq!(form.proxies[0].name, "b.example.com");
+    assert!(!run.contains("enabled"));
+    // Fields the form doesn't model survive.
+    assert!(run.contains("webServer.port = 7400"));
+    assert!(run.contains("intervalSeconds = 10"));
+
+    // `enabled = true` is stripped too (older frpc rejects unknown keys).
+    let src = HTTPS_SAMPLE.replacen(
+        "type = \"https\"\n",
+        "type = \"https\"\nenabled = true\n",
+        1,
+    );
+    let run = runtime_text(&src).unwrap();
+    assert_eq!(parse_to_form(&run).unwrap().proxies.len(), 2);
+    assert!(!run.contains("enabled"));
+}
+
+#[test]
+fn runtime_text_all_disabled_has_no_proxies() {
+    let src = HTTPS_SAMPLE.replace("type = \"https\"\n", "type = \"https\"\nenabled = false\n");
+    let run = runtime_text(&src).unwrap();
+    assert!(parse_to_form(&run).unwrap().proxies.is_empty());
+    assert!(!run.contains("[[proxies]]"));
+}
+
+#[test]
+fn disabled_proxy_is_not_validated_beyond_its_name() {
+    let mut form = parse_to_form(HTTPS_SAMPLE).unwrap();
+    // Broken on purpose: no domains, no local port, no plugin.
+    form.proxies[0].custom_domains.clear();
+    form.proxies[0].plugin = None;
+    assert!(!validate_form(&form).ok);
+    form.proxies[0].enabled = false;
+    let r = validate_form(&form);
+    assert!(r.ok, "{:?}", r.issues);
+
+    // Duplicate names are still an error even when disabled.
+    form.proxies[0].name = form.proxies[1].name.clone();
+    assert!(!validate_form(&form).ok);
+}
+
+#[test]
+fn warns_when_every_proxy_is_disabled() {
+    let mut form = parse_to_form(HTTPS_SAMPLE).unwrap();
+    for p in &mut form.proxies {
+        p.enabled = false;
+    }
+    let r = validate_form(&form);
+    assert!(r
+        .issues
+        .iter()
+        .any(|i| i.message.contains("所有代理都已关闭")));
+}
+
+#[test]
+fn form_json_without_enabled_defaults_to_on() {
+    let p: ProxyForm = serde_json::from_str(r#"{"name":"x","type":"tcp"}"#).unwrap();
+    assert!(p.enabled);
+}
