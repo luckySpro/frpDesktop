@@ -99,3 +99,24 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+  # 三个平台都成功后再公开草稿，避免发布缺少安装包的版本。
+  publish-release:
+    needs: publish-tauri
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+        run: |
+          count=$(gh release view "$TAG" --json assets --jq '.assets | length')
+          echo "assets: $count"
+          if [ "$count" -lt 6 ]; then
+            echo "安装包数量不足 ($count)，保留草稿" >&2
+            exit 1
+          fi
+          gh release edit "$TAG" --draft=false --latest
