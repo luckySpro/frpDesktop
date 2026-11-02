@@ -69,6 +69,7 @@ export function emptyPlugin(type: string): PluginForm {
 export function newHttpsSite(cert?: CertFile): ProxyForm {
   return {
     origin: null,
+    enabled: true,
     name: "",
     type: "https",
     customDomains: [],
@@ -88,6 +89,7 @@ export function newHttpsSite(cert?: CertFile): ProxyForm {
 export function newTcpProxy(): ProxyForm {
   return {
     origin: null,
+    enabled: true,
     name: "",
     type: "tcp",
     localIp: "127.0.0.1",

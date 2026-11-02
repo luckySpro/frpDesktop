@@ -303,7 +303,7 @@ pub fn check_form(form: &FrpcForm, cwd: &Path) -> Vec<Issue> {
         })
     };
 
-    for p in &form.proxies {
+    for p in form.proxies.iter().filter(|p| p.enabled) {
         let Some(pl) = p.plugin.as_ref() else {
             continue;
         };

@@ -21,14 +21,29 @@ use crate::AppState;
 
 // ------------------------------------------------------------------ helpers
 
+/// Regenerate `runtime.toml` (the file frpc runs) from the saved profile,
+/// leaving out proxies switched off in the UI.
+pub fn write_runtime(p: &AppPaths) -> AppResult<()> {
+    if !p.default_profile.is_file() {
+        let _ = std::fs::remove_file(&p.runtime_profile);
+        return Ok(());
+    }
+    let text = std::fs::read_to_string(&p.default_profile)?;
+    let run = config::runtime_text(&text)?;
+    fsutil::atomic_write(&p.runtime_profile, run.as_bytes(), false)?;
+    restrict(&p.runtime_profile);
+    Ok(())
+}
+
 pub fn start_spec(p: &AppPaths) -> AppResult<StartSpec> {
     let s = p.settings();
     let bin = p
         .frpc_binary(&s)
         .ok_or_else(|| AppError::msg("尚未安装 frpc，请先在「设置」中下载或指定 frpc"))?;
+    write_runtime(p)?;
     Ok(StartSpec {
         bin,
-        profile: p.default_profile.clone(),
+        profile: p.runtime_profile.clone(),
         cwd: p.data_dir.clone(),
         log_file: p.log_file.clone(),
         auto_restart: s.auto_restart,
@@ -207,6 +222,7 @@ pub async fn config_save(app: AppHandle, text: String, force: bool) -> AppResult
     if report.ok || force {
         fsutil::atomic_write(&p.default_profile, text.as_bytes(), true)?;
         restrict(&p.default_profile);
+        write_runtime(&p)?;
     }
     Ok(report)
 }
@@ -237,6 +253,8 @@ pub async fn config_verify(app: AppHandle, text: String) -> AppResult<VerifyResu
     let bin = p
         .frpc_binary(&p.settings())
         .ok_or_else(|| AppError::msg("尚未安装 frpc，无法执行 frpc verify"))?;
+    // Verify what frpc will really run (disabled proxies removed).
+    let text = config::runtime_text(&text).unwrap_or(text);
     let tmp = p.profiles_dir.join(".verify.toml");
     fsutil::atomic_write(&tmp, text.as_bytes(), false)?;
     restrict(&tmp);
@@ -394,9 +412,12 @@ fn refresh_daemon(p: &AppPaths) {
     if let Ok(d) = daemon::status() {
         if d.installed {
             if let Some(bin) = p.frpc_binary(&p.settings()) {
+                if write_runtime(p).is_err() {
+                    return;
+                }
                 let _ = daemon::enable(&DaemonSpec {
                     bin: &bin,
-                    profile: &p.default_profile,
+                    profile: &p.runtime_profile,
                     cwd: &p.data_dir,
                     log_file: &p.log_file,
                 });
@@ -459,11 +480,12 @@ pub async fn daemon_enable(app: AppHandle, state: State<'_, AppState>) -> AppRes
     let bin = p
         .frpc_binary(&p.settings())
         .ok_or_else(|| AppError::msg("尚未安装 frpc"))?;
+    write_runtime(&p)?;
     // Avoid two frpc instances fighting for the same proxies.
     let _ = process::stop(&app, state.runner.clone()).await;
     daemon::enable(&DaemonSpec {
         bin: &bin,
-        profile: &p.default_profile,
+        profile: &p.runtime_profile,
         cwd: &p.data_dir,
         log_file: &p.log_file,
     })
